@@ -22,6 +22,7 @@ library(terra)
 library(mapview)
 library(sf)
 library(osmdata)
+library(colorspace)
 
 message("Project root: ", here::here())
 options(timeout = 600)
@@ -157,6 +158,6 @@ clc_legend <- data.frame(
 ndvi.col <- function(n) {
   rev(sequential_hcl(n, "Green-Yellow"))
 }
-# ano.col is a red–green diverging palette, not used further here but defined.
+# ano.col is a red–green diverging palette fairly well for the bfast analysisi.
 ano.col  <- diverging_hcl(7, palette = "Red-Green",  register = "rg")
 
