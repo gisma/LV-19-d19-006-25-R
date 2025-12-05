@@ -1,4 +1,5 @@
 ############################################################
+# 02-2-bfast-classification.R
 # BFAST-based kNDVI change detection on gdalcubes NetCDF
 #
 # INPUT:
