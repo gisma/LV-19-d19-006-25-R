@@ -13,8 +13,6 @@ The responsibility for the content rests with the instructors. Statements, opini
 
 <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
 
-Here is a **concise, abstract, GitHub-style README** suitable for the *source-code section* of the LV-19-d19-006-25 website.
-It avoids details, methods, or site-specific explanation — it simply frames the repo’s purpose and structure.
 
 
 ## Repository content and purpose
