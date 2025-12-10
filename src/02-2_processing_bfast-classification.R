@@ -1,21 +1,59 @@
+#!/usr/bin/env Rscript
+
 ############################################################
-# 02-2-bfast-classification.R
-# BFAST-based kNDVI change detection on gdalcubes NetCDF
+# Script:   02-2_processing_bfast-classification.R
+# Author:   [Your Name]
+# Project:  [Your Project Name]
 #
-# INPUT:
+# Purpose
+# -------
+# Detect per-pixel structural breaks in vegetation dynamics using
+# BFAST on a **kNDVI time series** derived from a Sentinel-2
+# gdalcubes NetCDF time cube.
+#
+# Conceptual workflow
+# -------------------
+# 1) Open an existing Sentinel-2 monthly NetCDF cube with gdalcubes.
+# 2) Use `reduce_time()` with a **custom R reducer**:
+#      - for each pixel, build a kNDVI time series from bands B08/B04,
+#      - run `bfastmonitor()` on that series,
+#      - return:
+#          * `change_date`     – breakpoint time (if any),
+#          * `change_magnitude` – magnitude of change at breakpoint.
+# 3) Write the resulting per-pixel change information to a new
+#    NetCDF file for further analysis and mapping.
+#
+# INPUT
+# -----
 #   - Monthly Sentinel-2 cube:
-#       file.path(root_folder, "data/harz_2018_2022_all.nc")
+#       file.path(root_folder, "data", "burgwald_2018_2022_all.nc")
 #
-# OUTPUT:
+# OUTPUT
+# ------
 #   - BFAST results (per-pixel):
-#       file.path(root_folder, "data/burgwald_bfast_results.nc")
+#       file.path(root_folder, "data", "burgwald_bfast_results.nc")
 #
-# NOTES:
-#   - Assumes 01_setup-burgwald.R has been sourced:
-#       * root_folder <- here::here()
-#   - Uses gdalcubes reduce_time() with a custom R reducer.
-#   - All heavy work (kNDVI + bfastmonitor()) happens server-side
-#     in the gdalcubes processing chain.
+# Assumptions / requirements
+# --------------------------
+#   - `01_setup-burgwald.R` has been sourced so that:
+#       * `root_folder <- here::here()` is defined.
+#   - The NetCDF cube contains at least bands:
+#       * "B08" (NIR)
+#       * "B04" (RED)
+#   - The cube is **monthly** from 2018–2022:
+#       * time index used as `ts(..., start = c(2018, 1), frequency = 12)`
+#   - Reflectances are scaled to 0–10000 (or 0–1; the /10000 is harmless).
+#
+# Technical notes
+# ---------------
+#   - `gdalcubes::reduce_time()` executes the custom reducer on the
+#     *server side* / cube engine; only the resulting summary bands
+#     are written out.
+#   - The `FUN` passed to `reduce_time()` must be **self-contained**:
+#       * all packages needed inside must be loaded within `FUN`
+#         (here: `library(bfast)`).
+#   - Heavy work (kNDVI computation + BFAST) happens inside the
+#     gdalcubes processing chain; R only orchestrates the call.
 ############################################################
 
 library(gdalcubes)
@@ -113,4 +151,3 @@ tmap_mode("plot")
 tm_shape(bfast_star["change_magnitude"]) +
   tm_raster() +
   tm_layout(title = "BFAST change magnitude (kNDVI)")
-
