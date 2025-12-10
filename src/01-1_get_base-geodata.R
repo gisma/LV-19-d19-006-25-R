@@ -1,7 +1,12 @@
+#!/usr/bin/env Rscript
+
 ############################################################
-# 01-data-retrieval.R
+# Script:  01-1_get_base-geodata.R
+# Author:   [Your Name]
+# Project:  [Your Project Name]
 #
 # Purpose:
+# --------
 #   This script prepares all *base geodata* for the Burgwald AOI:
 #
 #   1) Topography:

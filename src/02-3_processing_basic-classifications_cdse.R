@@ -1,7 +1,12 @@
+#!/usr/bin/env Rscript
+
 ############################################################
-# 02-1-basic-classifications_cdse.R
+# Script:   02-3_processing_basic-classifications_cdse.R
+# Author:   [Your Name]
+# Project:  [Your Project Name]
 #
-# Task:
+# Purpose:
+# --------
 # - Perform classification for ONE CDSE-based predictor stack
 #   (one time slice, e.g. 2018-06-29) using:
 #     * k-means (unsupervised, exploratory)

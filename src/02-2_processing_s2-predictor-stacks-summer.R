@@ -1,7 +1,88 @@
 #!/usr/bin/env Rscript
 
+#######################################################################
+# Script:   02-2_processing_s2-predictor-stacks-summer.R
+# Author:   [Your Name]
+# Project:  [Your Project Name]
+#
+# Purpose:
+# --------
+# This script automatically builds yearly Sentinel-2 predictor stacks
+# for the Burgwald AOI. For each year in a given time window, it:
+#
+#   1. Queries the Copernicus Data Space Ecosystem (CDSE) STAC endpoint
+#      for Sentinel-2 L2A acquisitions over the Burgwald AOI.
+#   2. Aggregates daily mean cloud cover per date and year.
+#   3. Filters to summer months (June–August).
+#   4. Selects, for each year, the "best" summer day with minimal
+#      mean cloud cover (based on `eo:cloud_cover`).
+#   5. For each selected date, requests a multi-band predictor stack:
+#         - 12 Sentinel-2 spectral bands (RawBands.js)
+#         - kNDVI (kndvi.js)
+#         - SAVI (savi.js)
+#         - EVI (evi.js)
+#      using the CDSE processing services via CDSE::GetImage().
+#   6. Writes one GeoTIFF per year containing all predictor layers:
+#         "pred_stack_<year>.tif"
+#
+# Conceptual role in the workflow:
+# --------------------------------
+# The resulting yearly predictor stacks are intended as inputs for:
+#   - supervised land-cover classification,
+#   - time-series analysis of vegetation status,
+#   - microclimate modelling or other remote-sensing based analyses.
+#
+# Inputs (assumed):
+# -----------------
+# - Project layout managed by `here::here()`
+# - `worksheets/00-setup-burgwald.R` providing:
+#       * `aoi_burgwald_wgs` (sf polygon in EPSG:4326, Burgwald AOI)
+#       * `burgwald_bbox` (named numeric bbox: xmin/xmax/ymin/ymax)
+# - `worksheets/helper-func.R` (optional helper routines)
+# - Local JS processing scripts in `./scripts/`:
+#       * kndvi.js
+#       * savi.js
+#       * evi.js
+#   These implement the index calculations for CDSE processing.
+# - CORINE Land Cover raster (optional):
+#       data/raw/AOI_Burgwald/clc/clc5_2018_burgwald.tif
+# - Environment variables for CDSE OAuth authentication:
+#       * CDSE_ID
+#       * CDSE_SECRET
+#
+# Outputs:
+# --------
+# - Console messages describing:
+#       * chosen best summer day per year
+#       * download progress for each year/date
+# - GeoTIFF predictor stacks written to:
+#       ./data/pred_stack_<year>.tif
+#   Each stack contains:
+#       * B01, B02, B03, B04, B05, B06,
+#         B07, B08, B8A, B09, B11, B12
+#       * EVI, kNDVI, SAVI
+#
+# Dependencies:
+# -------------
+# - R packages: pacman, CDSE, rstac, terra, sf, dplyr, ggplot2, tidyr,
+#               colorspace, here, lubridate, plus several RS/GIS helpers.
+# - CDSE account with valid OAuth client credentials.
+#
+# Script structure:
+# -----------------
+# 0) Setup: packages, project paths, helper functions
+# 1) Geometries / optional CORINE check
+# 2) STAC client configuration for CDSE
+# 3) STAC search for Sentinel-2 L2A and daily cloud statistics
+# 4) OAuth client creation (ID/secret from environment variables)
+# 5) JS processing scripts (RawBands, kNDVI, SAVI, EVI)
+# 6) Helper function: build predictor stack for ONE date
+# 7) Loop over years: best summer day per year → predictor stack per year
+#
+#######################################################################
+
 ## ------------------------------------------------------------
-## 0) Setup: packages, project path, helper functions ----
+## 0) Setup: packages, project path, helper functions
 ## ------------------------------------------------------------
 
 # pacman – convenience package to install & load packages
@@ -32,18 +113,24 @@ pacman::p_load(
   here, CDSE, lubridate                       # project paths, CDSE client, dates
 )
 
-
+# Color palettes for vegetation indices:
+# ndvi.col() returns a green–yellow sequential palette, reversed.
+ndvi.col <- function(n) {
+  rev(sequential_hcl(n, "Green-Yellow"))
+}
+# ano.col is a red–green diverging palette, not used further here but defined.
+ano.col  <- diverging_hcl(7, palette = "Red-Green",  register = "rg")
 
 # Project setup: you assume a "here"-based project layout.
 # 00-setup-burgwald.R is expected to define:
 # - aoi_burgwald_wgs (sf polygon in EPSG:4326)
 # - burgwald_bbox    (bbox vector xmin/xmax/ymin/ymax)
-
-source(here::here(root_folder,"src", "00-setup-burgwald.R"))
-source(here::here(root_folder,"src", "01-fun-data-retrieval.R"))
+root_folder <- here::here()
+source(here::here("worksheets", "00-setup-burgwald.R"))
+source(here::here("worksheets", "helper-func.R"))
 
 ## ------------------------------------------------------------
-## 1) Geometries / CLC check (optional visual sanity check) ----
+## 1) Geometries / CLC check (optional visual sanity check)
 ## ------------------------------------------------------------
 
 # Simple ggplot showing the Burgwald AOI in red.
@@ -73,7 +160,7 @@ if (file.exists(clc_out_file)) {
 }
 
 ## ------------------------------------------------------------
-## 2) STAC client for Copernicus Data Space Ecosystem ----
+## 2) STAC client for Copernicus Data Space Ecosystem
 ## ------------------------------------------------------------
 
 # Build a STAC client pointing to the CDSE STAC endpoint.
@@ -97,7 +184,7 @@ datetime_range <- paste0(
 )
 
 ## ------------------------------------------------------------
-## 3) Search Sentinel-2 L2A over Burgwald and build daily stats ----
+## 3) Search Sentinel-2 L2A over Burgwald and build daily stats
 ## ------------------------------------------------------------
 
 # STAC search: Sentinel-2 L2A items intersecting your AOI bbox
@@ -119,6 +206,7 @@ tbl_range      <- rstac::items_as_tibble(s2_items_range)
 # Build a per-day summary:
 # - date: Date extracted from datetime
 # - year: year part of date
+# - month: month index (1–12)
 # - cloud: eo:cloud_cover property
 # Then compute mean cloud coverage per date and year.
 day_diag <- tbl_range |>
@@ -154,7 +242,7 @@ print(best_summer_days)
 # - mean_cloud
 
 ## ------------------------------------------------------------
-## 4) CDSE OAuth client (ID/Secret from environment variables) ----
+## 4) CDSE OAuth client (ID/Secret from environment variables)
 ## ------------------------------------------------------------
 
 # You expect the environment variables CDSE_ID and CDSE_SECRET
@@ -164,7 +252,7 @@ secret <- Sys.getenv("CDSE_SECRET")
 
 if (id == "" || secret == "") {
   # Hard safety guard: stop early if credentials are missing.
-  stop("CDSE_ID und/oder CDSE_SECRET sind nicht gesetzt (Umgebungsvariablen).")
+  stop("CDSE_ID and/or CDSE_SECRET are not set (environment variables).")
 }
 
 # Create an OAuth client object using the CDSE package.
@@ -172,14 +260,14 @@ if (id == "" || secret == "") {
 OAuthClient <- CDSE::GetOAuthClient(id = id, secret = secret)
 
 ## ------------------------------------------------------------
-## 5) JavaScript processing scripts for RawBands, kNDVI, SAVI, EVI ----
+## 5) JavaScript processing scripts for RawBands, kNDVI, SAVI, EVI
 ## ------------------------------------------------------------
 
 # RawBands.js is shipped inside the CDSE package (in its inst/scripts/).
 # It outputs 12 Sentinel-2 bands as separate layers.
 script_file_raw <- system.file("scripts", "RawBands.js", package = "CDSE")
 if (script_file_raw == "") {
-  stop("RawBands.js wurde im CDSE-Paket nicht gefunden.")
+  stop("RawBands.js was not found in the CDSE package.")
 }
 
 # kNDVI, SAVI, EVI are assumed to be local JS files in your project
@@ -191,12 +279,12 @@ script_file_evi   <- here::here("scripts", "evi.js")
 # Safety guard: fail fast if any JS file is missing.
 for (f in c(script_file_kndvi, script_file_savi, script_file_evi)) {
   if (!file.exists(f)) {
-    stop("JS-Script nicht gefunden: ", f)
+    stop("JS script not found: ", f)
   }
 }
 
 ## ------------------------------------------------------------
-## 6) Helper function: build predictor stack for ONE date ----
+## 6) Helper function: build predictor stack for ONE date
 ## ------------------------------------------------------------
 
 # This function:
@@ -220,7 +308,7 @@ get_pred_stack_for_date <- function(
 ) {
   # Normalize date to character "YYYY-MM-DD".
   day_str <- format(as.Date(the_date), "%Y-%m-%d")
-  message("==> Hole Daten für ", day_str)
+  message("==> Downloading data for ", day_str)
   
   # ---- 6.1 Raw bands (12 bands via RawBands.js)
   raw <- CDSE::GetImage(
@@ -236,7 +324,7 @@ get_pred_stack_for_date <- function(
   
   # Guard: ensure we got a SpatRaster.
   if (!inherits(raw, "SpatRaster")) {
-    stop("RawBands-GetImage() hat kein SpatRaster zurückgegeben (Datum: ", day_str, ").")
+    stop("RawBands GetImage() did not return a SpatRaster (date: ", day_str, ").")
   }
   
   # If we have 12 bands, assign S2 band names.
@@ -260,7 +348,7 @@ get_pred_stack_for_date <- function(
     client           = client
   )
   if (!inherits(kndvi, "SpatRaster")) {
-    stop("kNDVI-GetImage() hat kein SpatRaster zurückgegeben (Datum: ", day_str, ").")
+    stop("kNDVI GetImage() did not return a SpatRaster (date: ", day_str, ").")
   }
   names(kndvi)[1] <- "kNDVI"
   
@@ -277,7 +365,7 @@ get_pred_stack_for_date <- function(
     client           = client
   )
   if (!inherits(savi, "SpatRaster")) {
-    stop("SAVI-GetImage() hat kein SpatRaster zurückgegeben (Datum: ", day_str, ").")
+    stop("SAVI GetImage() did not return a SpatRaster (date: ", day_str, ").")
   }
   names(savi)[1] <- "SAVI"
   
@@ -294,7 +382,7 @@ get_pred_stack_for_date <- function(
     client           = client
   )
   if (!inherits(evi, "SpatRaster")) {
-    stop("EVI-GetImage() hat kein SpatRaster zurückgegeben (Datum: ", day_str, ").")
+    stop("EVI GetImage() did not return a SpatRaster (date: ", day_str, ").")
   }
   names(evi)[1] <- "EVI"
   
@@ -315,7 +403,7 @@ get_pred_stack_for_date <- function(
 }
 
 ## ------------------------------------------------------------
-## 7) Loop: for each year, download one summer predictor stack ----
+## 7) Loop: for each year, download one summer predictor stack
 ## ------------------------------------------------------------
 
 # Choice of AOI to be passed to GetImage: here, the buffered AOI.
@@ -335,7 +423,7 @@ for (i in seq_len(nrow(best_summer_days))) {
   dt <- best_summer_days$date[i]
   
   message("============================================")
-  message("Jahr ", yr, " – Datum ", dt, " (Sommer, min. cloud)")
+  message("Year ", yr, " – date ", dt, " (summer, minimum mean cloud cover)")
   
   stack_year <- get_pred_stack_for_date(
     the_date          = dt,
@@ -357,7 +445,7 @@ for (i in seq_len(nrow(best_summer_days))) {
     overwrite = TRUE
   )
   
-  message(">> geschrieben: ", out_file)
+  message(">> Written predictor stack: ", out_file)
 }
 
-message("Fertig: Sommer-Prädiktor-Stacks für alle Jahre in ", out_dir)
+message("Done: summer predictor stacks for all available years have been written to ", out_dir)

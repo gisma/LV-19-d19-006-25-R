@@ -1,7 +1,12 @@
+#!/usr/bin/env Rscript
+
 ############################################################
-# 02-stac-burgwald-gdalcubes.R
+# Script: 01-3_get-gdalcubes-sentinel-data.R
+# Author:   [Your Name]
+# Project:  [Your Project Name]
 #
 # Purpose:
+# --------
 #   Retrieve and preprocess Sentinel-2 L2A cloud-optimized scenes
 #   for the Burgwald AOI using a complete STAC → gdalcubes workflow.
 #

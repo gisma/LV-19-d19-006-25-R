@@ -1,3 +1,47 @@
+#!/usr/bin/env Rscript
+
+############################################################
+# Script:  02-1_processing_DEM-derivates-SAGA.R
+# Author:   [Your Name]
+# Project:  [Your Project Name]
+#
+# Purpose:
+# --------
+## - Derive a set of SAGA-GIS based terrain / relief parameters
+##   (filled DEM, slope/aspect/curvatures, multi-scale TPI)
+##   from one or more DEMs using Rsagacmd.
+##
+## Workflow:
+##  1) Initialise a global SAGA-GIS wrapper object (`saga`).
+##  2) Define a function `saga_derive_relief()` that:
+##       - fills sinks in the DEM,
+##       - computes slope/aspect/curvatures,
+##       - computes TPI for multiple radii,
+##       - writes all outputs to disk and returns them invisibly.
+##  3) Call this function for:
+##       - an (intended) 1 m DEM,
+##       - an aggregated 100 m DEM.
+##
+## Wrapper concept (API calls in mature GIS software):
+## - `Rsagacmd::saga_gis()` creates an R **wrapper object** (`saga`)
+##   that exposes SAGA tools as R functions:
+##       `saga$ta_morphometry$slope_aspect_curvature(...)`
+## - Internally, these wrappers:
+##     * build the correct command-line / API call,
+##     * manage parameters and temporary files,
+##     * convert results back to R objects (here: `terra::SpatRaster`).
+## - This pattern is similar to:
+##     * `qgisprocess::qgis_run_algorithm()` (QGIS),
+##     * `rgrass7::execGRASS()` (GRASS GIS),
+##     * ArcPy (Python wrapper around ArcGIS).
+## - Advantage: you keep full GIS functionality, but you orchestrate
+##   everything reproducibly from R.
+##
+## NOTE:
+## - The **executable code below is unchanged**; only comments and this
+##   header were added for documentation.
+## ============================================================
+
 # -------------------------------------------------------
 # SAGA-GIS Relief-Derivate mit Rsagacmd (sagacmd)
 # -------------------------------------------------------
@@ -6,6 +50,8 @@ library(terra)
 library(Rsagacmd)
 
 # einmal global initialisieren
+# -> this creates the SAGA wrapper object that provides access
+#    to SAGA modules via R (see wrapper concept above).
 saga <- saga_gis(
   raster_backend = "terra",
   vector_backend = "sf",
