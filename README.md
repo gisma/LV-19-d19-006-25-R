@@ -55,3 +55,5 @@ renv::restore()
 This will automatically install all required R packages in the correct versions as defined in renv.lock.
 Your local system libraries do not matter — renv reconstructs the exact project environment for you.
 
+> Note: The first run of renv::restore() may take a while because all required packages are installed into an isolated project library.
+
