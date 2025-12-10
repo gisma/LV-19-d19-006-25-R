@@ -22,46 +22,24 @@
 #          building, railway) intersecting the AOI
 #        - Save one file per OSM key under data/raw/AOI_Burgwald/osm_by_key/
 #
-#   4) Meteorological forcing (DWD):
-#        - Download and preprocess DWD station data for the Burgwald region:
-#            * Hourly wind (FF, DD)
-#            * Hourly precipitation (R1)
-#            * Sub-hourly precipitation (10-min and 5-min resolution)
-#        - Time period is controlled by start_date / end_date (default: last 2 years)
-#
 # Output:
 #   All base layers are stored under:
 #     data/raw/AOI_Burgwald/
 #
-#   plus processed DWD station data under:
-#     data/raw/dwd-stations/
-#     data/processed/dwd/
-#
 # Notes:
 #   - Satellite data (Sentinel / CDSE / gdalcubes) are fetched and processed
 #     in *separate* scripts; this file only prepares DEM, land cover,
-#     OSM context layers and DWD meteorological data.
+#     OSM context layers.
 #
 # Requirements:
 #   - 00-setup-burgwald.R must be executed first
 #       → loads packages
 #       → defines aoi_burgwald_wgs, aoi_root, run_if_missing(), download_if_missing()
-#       → sets global DWD paths (path_dwd_raw, path_dwd_processed)
 ############################################################
 
 
 # sourcing of the setup and specific used funtions
 source("src/00-setup-burgwald.R")
-
-
-# statdate/ enddate determines the meteo data download period
-
-start_date <- Sys.Date() - 365 * 2
-end_date   <- Sys.Date()
-
-start_dt <- as.POSIXct(paste0(start_date, " 00:00:00"), tz = "UTC")
-end_dt   <- as.POSIXct(paste0(end_date,   " 23:59:59"), tz = "UTC")
-
 
 
 ############################################################
@@ -213,30 +191,4 @@ osm_by_key <- get_osm_burgwald_by_key(
 # Example visualization
 mapview::mapview(osm_by_key$highway$lines)
 mapview::mapview(osm_by_key$landuse$polygons)
-
-FD_bw <- burgwald_get_hourly_dwd(
-  var        = "wind",           # << NICHT "precipitation"
-  params     = c("FF", "DD"),    # Windgeschwindigkeit + Richtung
-  start_date = start_date,
-  end_date   = end_date
-)
-
-  rr_60min_bw <- burgwald_get_hourly_dwd(
-    var        = "precipitation",
-    params     = "R1",
-    start_date = start_date,
-    end_date   = end_date
-  )
-
-rr_10min <- burgwald_get_subhourly_precip(
-  resolution = "10min",
-  start_date = start_date,
-  end_date   = end_date
-)
-
-rr_5min <- burgwald_get_subhourly_precip(
-  resolution = "5min",
-  start_date = start_date,
-  end_date   = end_date
-)
 
