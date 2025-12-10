@@ -34,10 +34,8 @@ high-level convenience wrappers with low-level, fully transparent R workflows.
 ## Structure
 
 ```text
-scripts/    # modular processing steps
-src/        # helper functions and backend setup
-data/       # raw + processed data placeholders
-qmd/        # conceptual notes and documentation
+renv/    # renv
+src/        # scripts &  functions and backend setup
 ```
 
 ## Intended Use
