@@ -2,7 +2,7 @@
 
 ## Course Context & Licensing 
 
-![Course Header](https://gisma-courses.github.io/LV-19-d19-010-envi/images/remsens.png "Image source: C.Reudenbach")
+![Course Header](https://github.com/gisma-courses/LV-19-d19-006-25/images/gw_sp.png) "Image source: C.Reudenbach")
 
 
 This course is part of [gisma spatial science ressources](https://gisma-courses.github.io/gc/) of the [Department of Geography](https://www.uni-marburg.de/fb19).
