@@ -129,7 +129,7 @@ if (file.exists(clc_out_file)) {
 cdse_stac <- rstac::stac("https://stac.dataspace.copernicus.eu/v1/")
 
 # Build a slightly buffered AOI (in degrees).
-# buffer_deg = 0.0 means effectively no buffer; you can increase if needed.
+buffer_deg = 0.0 #means effectively no buffer; you can increase if needed.
 aoi_burgwald_wgs_buf <- sf::st_buffer(aoi_burgwald_wgs, buffer_deg)
 bbox_bw <- sf::st_bbox(aoi_burgwald_wgs_buf)
 

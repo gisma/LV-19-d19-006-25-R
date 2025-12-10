@@ -100,6 +100,7 @@ if (!requireNamespace("CDSE", quietly = TRUE)) {
   remotes::install_github("zivankaraman/CDSE")
 }
 
+
 # Load all required packages in one go (installing if missing).
 # This gives you spatial, remote sensing, ML and helper packages.
 pacman::p_load(
@@ -113,21 +114,13 @@ pacman::p_load(
   here, CDSE, lubridate                       # project paths, CDSE client, dates
 )
 
-# Color palettes for vegetation indices:
-# ndvi.col() returns a green–yellow sequential palette, reversed.
-ndvi.col <- function(n) {
-  rev(sequential_hcl(n, "Green-Yellow"))
-}
-# ano.col is a red–green diverging palette, not used further here but defined.
-ano.col  <- diverging_hcl(7, palette = "Red-Green",  register = "rg")
-
 # Project setup: you assume a "here"-based project layout.
 # 00-setup-burgwald.R is expected to define:
 # - aoi_burgwald_wgs (sf polygon in EPSG:4326)
 # - burgwald_bbox    (bbox vector xmin/xmax/ymin/ymax)
 root_folder <- here::here()
-source(here::here("worksheets", "00-setup-burgwald.R"))
-source(here::here("worksheets", "helper-func.R"))
+source(here::here("src", "00-setup-burgwald.R"))
+source(here::here("src", "01-fun-data-retrieval.R"))
 
 ## ------------------------------------------------------------
 ## 1) Geometries / CLC check (optional visual sanity check)
@@ -168,7 +161,7 @@ cdse_stac <- rstac::stac("https://stac.dataspace.copernicus.eu/v1/")
 
 # Build a slightly buffered AOI (in degrees).
 # buffer_deg = 0.0 means effectively no buffer; you can increase if needed.
-buffer_deg <- 0.0
+buffer_deg = 0.01 #
 aoi_burgwald_wgs_buf <- sf::st_buffer(aoi_burgwald_wgs, buffer_deg)
 bbox_bw <- sf::st_bbox(aoi_burgwald_wgs_buf)
 
@@ -272,9 +265,9 @@ if (script_file_raw == "") {
 
 # kNDVI, SAVI, EVI are assumed to be local JS files in your project
 # (these scripts define how the EOxHub processing service computes the index).
-script_file_kndvi <- here::here("scripts", "kndvi.js")
-script_file_savi  <- here::here("scripts", "savi.js")
-script_file_evi   <- here::here("scripts", "evi.js")
+script_file_kndvi <- here::here("src", "kndvi.js")
+script_file_savi  <- here::here("src", "savi.js")
+script_file_evi   <- here::here("src", "evi.js")
 
 # Safety guard: fail fast if any JS file is missing.
 for (f in c(script_file_kndvi, script_file_savi, script_file_evi)) {

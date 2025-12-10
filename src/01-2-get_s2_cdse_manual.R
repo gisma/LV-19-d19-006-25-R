@@ -159,16 +159,21 @@ cdse_get_access_token <- function(client_id, client_secret) {
     encode = "form"
   )
   
+  # Debug-Ausgabe: Status + Body
+  message("Token status: ", httr::status_code(resp))
+  txt <- httr::content(resp, as = "text", encoding = "UTF-8")
+  #message("Token response body:\n", txt)
+  
   httr::stop_for_status(resp)
-  tok <- jsonlite::fromJSON(
-    httr::content(resp, as = "text", encoding = "UTF-8")
-  )$access_token
+  
+  tok <- jsonlite::fromJSON(txt)$access_token
   
   if (is.null(tok) || !nzchar(tok)) {
-    stop("Failed to obtain access token from CDSE.")
+    stop("Failed to obtain access token from CDSE (no access_token field).")
   }
   tok
 }
+
 
 # Evalscript for 12 raw Sentinel-2 bands as reflectance
 evalscript_raw <- "
@@ -230,7 +235,7 @@ cdse_get_image_raw <- function(the_date,
             from = paste0(day_str, "T00:00:00Z"),
             to   = paste0(day_str, "T23:59:59Z")
           ),
-          mosaickingOrder = "LEAST_CC"
+          mosaickingOrder = "leastCC"
         )
       ))
     ),
@@ -249,11 +254,24 @@ cdse_get_image_raw <- function(the_date,
     url = "https://sh.dataspace.copernicus.eu/api/v1/process",
     httr::add_headers(
       Authorization = paste("Bearer", access_token),
-      "Content-Type" = "application/json"
+      "Content-Type" = "application/json",
+      Accept         = "image/tiff"     # <- HIER muss es stehen!
     ),
     body = jsonlite::toJSON(body, auto_unbox = TRUE)
   )
   
+  status <- httr::status_code(resp)
+  # txt    <- httr::content(resp, as = "text", encoding = "UTF-8")
+  # 
+  # message("CDSE status: ", status)
+  # message("CDSE response (first 2000 chars):\n",
+  #         substr(txt, 1, 2000))
+  # 
+  # # KEIN stop_for_status() hier!
+  # if (status >= 400) {
+  #   stop("CDSE request failed with status ", status)
+  # }
+  # 
   httr::stop_for_status(resp)
   
   tf <- tempfile(fileext = ".tif")
@@ -299,7 +317,7 @@ get_pred_stack_for_date_manual <- function(the_date,
 
 cdse_stac <- rstac::stac("https://stac.dataspace.copernicus.eu/v1/")
 
-buffer_deg <- 0.0
+buffer_deg = 0.01 #
 aoi_burgwald_wgs_buf <- st_buffer(aoi_burgwald_wgs, buffer_deg)
 bbox_bw <- st_bbox(aoi_burgwald_wgs_buf)
 
