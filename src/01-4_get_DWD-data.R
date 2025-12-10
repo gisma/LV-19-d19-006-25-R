@@ -2,241 +2,116 @@
 
 ############################################################
 # Script:  01-4-get_DWD-data.R
-# Author:   [Your Name]
-# Project:  [Your Project Name]
+# Author:  [Your Name]
+# Project: [Your Project Name]
 #
-# Purpose:
-# --------
-#   This script prepares all *base geodata* for the Burgwald AOI:
+# Purpose
+# -------
+# Thin wrapper script that **controls the time window** for DWD data
+# and **calls the Burgwald-specific helper functions** to download
+# and preprocess:
 #
-#   1) Topography:
-#        - Download and mosaic DGM1 (1 m) for the surrounding counties
-#        - Clip the DEM to the Burgwald AOI
+#   1) Hourly wind (FF = speed, DD = direction)
+#   2) Hourly precipitation (R1)
+#   3) Sub-hourly precipitation (10-min and 5-min)
 #
-#   2) Land cover:
-#        - Extract and crop CLC5 2018 (Copernicus 100 m raster)
-#        - Store a clipped land-cover raster for the AOI
+# All heavy lifting (station selection by AOI, downloads, unzipping,
+# time filtering, joining metadata, writing CSV/RDS) is done inside:
 #
-#   3) Vector context data (OpenStreetMap):
-#        - Download OSM feature groups (highway, landuse, natural, waterway,
-#          building, railway) intersecting the AOI
-#        - Save one file per OSM key under data/raw/AOI_Burgwald/osm_by_key/
+#   - burgwald_get_hourly_dwd()
+#   - burgwald_get_subhourly_precip()
 #
-#   4) Meteorological forcing (DWD):
-#        - Download and preprocess DWD station data for the Burgwald region:
-#            * Hourly wind (FF, DD)
-#            * Hourly precipitation (R1)
-#            * Sub-hourly precipitation (10-min and 5-min resolution)
-#        - Time period is controlled by start_date / end_date (default: last 2 years)
+# This script is therefore the **orchestrator** for DWD forcing data:
+# you only set the period (`start_date`, `end_date`) and then call the
+# high-level functions once.
 #
-# Output:
-#   All base layers are stored under:
-#     data/raw/AOI_Burgwald/
+# Output (handled by the helper functions)
+# ---------------------------------------
+# - Raw and processed DWD station files under:
+#       data/raw/dwd-stations/
+#       data/processed/dwd-stations/
 #
-#   plus processed DWD station data under:
-#     data/raw/dwd-stations/
-#     data/processed/dwd/
-#
-# Notes:
-#   - Satellite data (Sentinel / CDSE / gdalcubes) are fetched and processed
-#     in *separate* scripts; this file only prepares DEM, land cover,
-#     OSM context layers and DWD meteorological data.
-#
-# Requirements:
-#   - 00-setup-burgwald.R must be executed first
-#       → loads packages
-#       → defines aoi_burgwald_wgs, aoi_root, run_if_missing(), download_if_missing()
-#       → sets global DWD paths (path_dwd_raw, path_dwd_processed)
+# Prerequisites
+# -------------
+# - 00-setup-burgwald.R has been run and:
+#     * loads all required packages
+#     * defines aoi_burgwald_wgs and project paths
+#     * defines burgwald_get_hourly_dwd()
+#       and burgwald_get_subhourly_precip()
 ############################################################
 
 
-# sourcing of the setup and specific used funtions
+# Source the global setup.
+# This must define:
+#   - aoi_burgwald_wgs
+#   - path / directory settings
+#   - the DWD helper functions used below.
 source("src/00-setup-burgwald.R")
 
-  
-# statdate/ enddate determines the meteo data download period
 
+# ----------------------------------------------------------
+# 1) Define the DWD download period
+# ----------------------------------------------------------
+# Here: last 2 years, from 00:00:00 on start_date
+#       to 23:59:59 on end_date (inclusive day range).
 start_date <- Sys.Date() - 365 * 2
 end_date   <- Sys.Date()
 
+# POSIX versions (UTC) – useful if you need exact timestamps
+# for further processing or logging.
 start_dt <- as.POSIXct(paste0(start_date, " 00:00:00"), tz = "UTC")
 end_dt   <- as.POSIXct(paste0(end_date,   " 23:59:59"), tz = "UTC")
 
 
 
-############################################################
-# 1) DGM1 processing (1 m) → mosaic + clip
-#    Output: data/raw/AOI_Burgwald/dem/dem_dgm1_burgwald.tif
-############################################################
-
-dem_out_file <- file.path(aoi_root, "dem", "dem_dgm1_burgwald.tif")
-
-run_if_missing(dem_out_file, {
-  
-  # HVBG provides date-specific links, so URLs are built dynamically.
-  today <- format(Sys.Date(), "%Y%m%d")
-  
-  base_url_wf <- paste0(
-    "https://gds.hessen.de/downloadcenter/", today,
-    "/3D-Daten/Digitales%20Gel%C3%A4ndemodell%20(DGM1)/Landkreis%20Waldeck-Frankenberg/"
-  )
-  
-  base_url_mr <- paste0(
-    "https://gds.hessen.de/downloadcenter/", today,
-    "/3D-Daten/Digitales%20Gelände­modell%20(DGM1)/Landkreis%20Marburg-Biedenkopf/"
-  )
-  
-  # DGM1 ZIPs covering the Burgwald region (Hesse).
-  dgm1_urls <- c(
-    burgwald     = paste0(base_url_wf, "Burgwald%20-%20DGM1.zip"),
-    gemuenden    = paste0(base_url_wf, "Gem%C3%BCnden%20(Wohra)%20-%20DGM1.zip"),
-    rosenthal    = paste0(base_url_wf, "Rosenthal%20-%20DGM1.zip"),
-    muenchhausen = paste0(base_url_mr, "M%C3%BCnchhausen%20-%20DGM1.zip"),
-    rauschenberg = paste0(base_url_mr, "Rauschenberg%20-%20DGM1.zip"),
-    coelbe       = paste0(base_url_mr, "C%C3%B6lbe%20-%20DGM1.zip"),
-    lahntal      = paste0(base_url_mr, "Lahntal%20-%20DGM1.zip"),
-    wohra        = paste0(base_url_mr, "Wohratal%20-%20DGM1.zip"),
-    wetter       = paste0(base_url_mr, "Wetter%20(Hessen)%20-%20DGM1.zip"),
-    haina        = paste0(base_url_wf, "Haina%20(Kloster)%20-%20DGM1.zip")
-  )
-  
-  all_tif_files <- character(0)
-  
-  # ----------------------------------------------
-  # Download all DGM1 ZIP files + extract all TIFs
-  # ----------------------------------------------
-  for (nm in names(dgm1_urls)) {
-    
-    url_i      <- dgm1_urls[[nm]]
-    zip_file_i <- here::here("data", "raw", paste0("dgm1_", nm, ".zip"))
-    unzip_dir  <- here::here("data", "raw", paste0("dgm1_", nm))
-    
-    download_if_missing(url_i, zip_file_i, mode = "wb")
-    
-    if (!fs::dir_exists(unzip_dir)) {
-      fs::dir_create(unzip_dir)
-      unzip(zip_file_i, exdir = unzip_dir)
-    }
-    
-    tif_i <- dir(
-      unzip_dir,
-      pattern = "\\.tif$",
-      recursive = TRUE,
-      full.names = TRUE
-    )
-    
-    all_tif_files <- c(all_tif_files, tif_i)
-  }
-  
-  # Create a mosaic of all DGM tiles
-  dem_list <- lapply(all_tif_files, function(f) {
-    r <- terra::rast(f)
-    terra::crs(r) <- "EPSG:25832"  # ETRS89 / UTM 32N
-    r
-  })
-  
-  dem_merged <- do.call(terra::mosaic, c(dem_list, fun = "min"))
-  
-  # Clip mosaic to AOI
-  aoi_dem_sf <- sf::st_transform(aoi_burgwald_wgs, terra::crs(dem_merged))
-  aoi_dem_v  <- terra::vect(aoi_dem_sf)
-  
-  dem_burgwald <- dem_merged |>
-    terra::crop(aoi_dem_v) |>
-    terra::mask(aoi_dem_v)
-  
-  terra::writeRaster(dem_burgwald, dem_out_file, overwrite = TRUE)
-  message("✓ DGM1 saved to: ", dem_out_file)
-})
-
-
-############################################################
-# 2) CLC5 2018 – extract Copernicus raster → clip to AOI
-#    Output: data/raw/AOI_Burgwald/clc/clc5_2018_burgwald.tif
-############################################################
-
-clc_out_file <- file.path(aoi_root, "clc", "clc5_2018_burgwald.tif")
-
-run_if_missing(clc_out_file, {
-  
-  # Main CLC ZIP containing subdirectories and an inner ZIP
-  clc_zip  <- here::here("data", "raw", "31916.zip")
-  clc_root <- here::here("data", "raw", "clc5_2018_copernicus")
-  unzip(clc_zip, exdir = clc_root)
-  
-  # Find "Results/" inside Copernicus archive
-  results_dir <- dir(clc_root, pattern = "Results", full.names = TRUE)[1]
-  zipname     <- dir(results_dir, pattern = "\\.zip$", full.names = TRUE)[1]
-  
-  # Extract raster100m package into data/raw/
-  unzip(zipname, exdir = here::here("data", "raw"))
-  
-  # Path inside the Copernicus structure
-  data_dir <- here::here(
-    "data", "raw",
-    "u2018_clc2018_v2020_20u1_raster100m", "DATA"
-  )
-  
-  clc_tif <- dir(data_dir, pattern = "\\.tif$", full.names = TRUE)[1]
-  
-  clc_rast <- terra::rast(clc_tif)
-  
-  # Clip to AOI
-  aoi_clc   <- sf::st_transform(aoi_burgwald_wgs, terra::crs(clc_rast))
-  aoi_clc_v <- terra::vect(aoi_clc)
-  
-  clc_crop <- clc_rast |>
-    terra::crop(aoi_clc_v) |>
-    terra::mask(aoi_clc_v)
-  
-  terra::writeRaster(clc_crop, clc_out_file, overwrite = TRUE)
-  message("✓ CLC5 raster saved to: ", clc_out_file)
-})
-
-
-############################################################
-# 3) OSM download by key (roads, landuse, natural, …)
-#    Output: one file per OSM key under:
-#            data/raw/AOI_Burgwald/osm_by_key/
-############################################################
-
-osm_dir <- file.path(aoi_root, "osm_by_key")
-
-osm_by_key <- get_osm_burgwald_by_key(
-  aoi_wgs84 = aoi_burgwald_wgs,
-  out_dir   = osm_dir,
-  keys      = c("highway", "landuse", "natural", "waterway",
-                "building", "railway"),
-  write     = TRUE
-)
-
-# Example visualization
-mapview::mapview(osm_by_key$highway$lines)
-mapview::mapview(osm_by_key$landuse$polygons)
-
+# ----------------------------------------------------------
+# 2) Hourly wind: FF (speed), DD (direction)
+# ----------------------------------------------------------
 FD_bw <- burgwald_get_hourly_dwd(
-  var        = "wind",           # << NICHT "precipitation"
-  params     = c("FF", "DD"),    # Windgeschwindigkeit + Richtung
+  var        = "wind",           # hourly wind product
+  params     = c("FF", "DD"),    # FF -> F (speed), DD -> D (direction)
   start_date = start_date,
   end_date   = end_date
 )
+# → Returns an sf object with wind time series for all stations
+#   inside Burgwald AOI + buffer; also writes CSV/RDS to disk
+#   (depending on helper defaults).
 
-  rr_60min_bw <- burgwald_get_hourly_dwd(
-    var        = "precipitation",
-    params     = "R1",
-    start_date = start_date,
-    end_date   = end_date
-  )
 
+# ----------------------------------------------------------
+# 3) Hourly precipitation: R1
+# ----------------------------------------------------------
+rr_60min_bw <- burgwald_get_hourly_dwd(
+  var        = "precipitation",  # hourly precipitation product
+  params     = "R1",             # hourly rain sum (mm)
+  start_date = start_date,
+  end_date   = end_date
+)
+# → Again: sf object with hourly precipitation for AOI stations,
+#   plus CSV/RDS written by the helper.
+
+
+# ----------------------------------------------------------
+# 4) Sub-hourly precipitation: 10-minute sums
+# ----------------------------------------------------------
 rr_10min <- burgwald_get_subhourly_precip(
-  resolution = "10min",
+  resolution = "10min",          # 10-minute precipitation product
   start_date = start_date,
   end_date   = end_date
 )
+# → sf object with 10-min rain sums (RWS_10) for AOI stations.
 
+
+# ----------------------------------------------------------
+# 5) Sub-hourly precipitation: 5-minute sums
+# ----------------------------------------------------------
 rr_5min <- burgwald_get_subhourly_precip(
-  resolution = "5min",
+  resolution = "5min",           # 5-minute precipitation product
   start_date = start_date,
   end_date   = end_date
 )
+# → sf object with 5-min rain sums (RS_05) for AOI stations.
 
+# At this point, all relevant DWD forcing data for the chosen
+# time period are available on disk and in memory (FD_bw,
+# rr_60min_bw, rr_10min, rr_5min) for further modelling.
