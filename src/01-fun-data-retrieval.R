@@ -1237,3 +1237,11 @@ mapview_clc <- function(r,
   )
 }
 
+write_nc_if_missing <- function(cube, path) {
+  if (file.exists(path)) {
+    message("NetCDF existiert bereits, überspringe: ", path)
+    return(invisible(FALSE))
+  }
+  gdalcubes::write_ncdf(cube, path, overwrite = TRUE)
+  invisible(TRUE)
+}

@@ -62,6 +62,12 @@
 #
 ############################################################
 
+
+# sourcing of the setup and specific used funtions
+source("src/00-setup-burgwald.R")
+
+out_file <- file.path(root_folder, "data/burgwald_2018_2022_all.nc")
+
 ## ----stac_burgwald_gdalcubes----------------------------------------------
 
 # 1) Build a STAC client for the Earth-search API hosted by Element84 on AWS.
@@ -200,11 +206,9 @@ gdalcubes::gdalcubes_options(
 # raster_cube(...) creates a virtual data cube over the COGs.
 # write_ncdf(...) is the *action* that actually triggers reading from the
 # cloud and writing the aggregated cube to disk as a NetCDF file.
-gdalcubes::raster_cube(s2_collection, v, mask = s2_mask) |>
-  gdalcubes::write_ncdf(
-    file.path(root_folder, "data/burgwald_2018_2022_all.nc"),
-    overwrite = TRUE
-  )
+cube <- gdalcubes::raster_cube(s2_collection, v, mask = s2_mask)
+write_nc_if_missing(cube, out_file)
+
 
 
 
