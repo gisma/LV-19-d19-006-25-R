@@ -85,42 +85,13 @@
 ## 0) Setup: packages, project path, helper functions
 ## ------------------------------------------------------------
 
-# pacman – convenience package to install & load packages
-if (!requireNamespace("pacman", quietly = TRUE)) {
-  install.packages("pacman")
-}
-library(pacman)
-
-# Install CDSE from GitHub if it is not yet available.
-# CDSE = R client for Copernicus Data Space Ecosystem.
-if (!requireNamespace("CDSE", quietly = TRUE)) {
-  if (!requireNamespace("remotes", quietly = TRUE)) {
-    install.packages("remotes")
-  }
-  remotes::install_github("zivankaraman/CDSE")
-}
-
-
-# Load all required packages in one go (installing if missing).
-# This gives you spatial, remote sensing, ML and helper packages.
-pacman::p_load(
-  mapview, mapedit, tmap, tmaptools,           # interactive and thematic maps
-  raster, terra, tidyterra, stars, gdalcubes, sf, # raster & vector data, cubes
-  RStoolbox, exactextractr,                   # RS utilities, exact raster extraction
-  randomForest, ranger, e1071, caret,         # ML / classification
-  dplyr, ggplot2, tidyr,                      # tidyverse core
-  link2GI, rstac, OpenStreetMap,              # GIS bindings, STAC, OSM tiles
-  colorspace, ows4R, httr,                    # palettes, OGC services, HTTP
-  here, CDSE, lubridate                       # project paths, CDSE client, dates
-)
-
 # Project setup: you assume a "here"-based project layout.
 # 00-setup-burgwald.R is expected to define:
 # - aoi_burgwald_wgs (sf polygon in EPSG:4326)
 # - burgwald_bbox    (bbox vector xmin/xmax/ymin/ymax)
 root_folder <- here::here()
 source(here::here("src", "00-setup-burgwald.R"))
-source(here::here("src", "01-fun-data-retrieval.R"))
+
 
 ## ------------------------------------------------------------
 ## 1) Geometries / CLC check (optional visual sanity check)

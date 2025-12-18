@@ -29,17 +29,8 @@
 # -----------------------------
 # 0) Packages
 # -----------------------------
-library(here)
-library(terra)
-library(sf)
-library(dplyr)
-library(exactextractr)
-library(caret)
-library(RStoolbox)
-library(randomForest)
-library(sp)  # for Spatial* objects used by superClass()
+source(here::here("src", "00-setup-burgwald.R"))
 
-message("Project root (here): ", here::here())
 
 # -----------------------------
 # 1) Input paths (adjust only if needed)
@@ -182,7 +173,6 @@ mlc_model <- RStoolbox::superClass(
   responseCol   = class_field,
   model         = "mlc",
   tuneLength    = 1,
-  trainPartition = 0.7,
   verbose       = TRUE
 )
 
@@ -251,16 +241,18 @@ message("RF classification written to data/classification_rf_2018.tif")
 # -------------------------------------------------------------------
 
 # Predict classes for the independent RF test data
-rf_pred_test <- predict(rf_model, newdata = testDat)
+rf_pred_test <- predict(rf_model, newdata = testDat[, predictor_cols, drop = FALSE])
+
 
 # Compute confusion matrix for Random Forest
 cm_rf <- caret::confusionMatrix(
-  data      = rf_pred_test,   # predicted classes
-  reference = testDat$class   # reference labels
+  data      = rf_pred_test,
+  reference = testDat[[class_field]]
 )
 
+
 cm_rf
-essage("Random Forest confusion matrix (test data):")
+message("Random Forest confusion matrix (test data):")
 print(cm_rf)
 
 # Optionally save the model + confusion matrix

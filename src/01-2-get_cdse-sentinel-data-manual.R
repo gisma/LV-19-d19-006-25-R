@@ -46,15 +46,6 @@ needed <- c(
 inst <- needed[!needed %in% rownames(installed.packages())]
 if (length(inst) > 0) install.packages(inst)
 
-library(terra)
-library(sf)
-library(rstac)
-library(httr)
-library(jsonlite)
-library(here)
-library(dplyr)
-library(lubridate)
-library(ggplot2)
 
 # Project-specific setup: AOI etc.
 # Expects aoi_burgwald_wgs and burgwald_bbox to be defined there.

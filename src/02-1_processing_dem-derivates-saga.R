@@ -45,9 +45,9 @@
 # -------------------------------------------------------
 # SAGA-GIS Relief-Derivate mit Rsagacmd (sagacmd)
 # -------------------------------------------------------
-library(here)
-library(terra)
-library(Rsagacmd)
+
+source(here::here("src", "00-setup-burgwald.R"))
+
 
 # einmal global initialisieren
 # -> this creates the SAGA wrapper object that provides access
@@ -120,18 +120,25 @@ saga_derive_relief <- function(dem,
 # -------------------------------------------------------
 # 1) Originalauflösung (DGM1 Burgwald, ~1 m)
 # -------------------------------------------------------
-dem_1m <- dem = here::here("data", "processed", "dem_dgm1_burgwald.tif")
+dem_1m_file <- here::here("data", "raw", "AOI_Burgwald", "dem", "dem_dgm1_burgwald.tif")
+stopifnot(file.exists(dem_1m_file))
+
+dem_1m <- terra::rast(dem_1m_file)
+
 
 
 # Originalauflösung
 relief_1m <- saga_derive_relief(
-  dem    = dem_burgwald,
+  dem    = dem_1m,
   prefix = "dem1m_burgwald",
   outdir = here::here("data", "processed", "relief_1m")
 )
 
+
 # 100 m DEM in R aggregieren (Beispiel)
-dem_100m <- aggregate(rast(dem_1m), 100)
+dem_100m <- terra::aggregate(dem_1m, fact = 100)
+
+
 
 relief_100m <- saga_derive_relief(
   dem    = dem_100m,
