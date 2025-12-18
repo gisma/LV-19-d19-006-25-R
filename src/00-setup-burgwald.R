@@ -1,5 +1,5 @@
 ############################################################
-# 01_setup-burgwald.R
+# 00_setup-burgwald.R
 #
 # Tasks:
 # 1) Load all packages
@@ -16,13 +16,72 @@
 
 # -----------------------------
 # 0) Packages & project root
-library(here)
-library(fs)
-library(terra)
-library(mapview)
-library(sf)
-library(osmdata)
-library(colorspace)
+if (!requireNamespace("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+library(pacman)
+
+pacman::p_load(
+  
+  # --- project / filesystem / dates
+  here,
+  fs,
+  lubridate,
+  
+  # --- spatial core (order matters)
+  sf,
+  terra,
+  
+  # --- cubes / STAC / remote sensing backends
+  gdalcubes,
+  stars,
+  tidyterra,
+  rstac,
+  CDSE,
+  
+  # --- RS utilities
+  exactextractr,
+  RStoolbox,
+  
+  # --- tidy data / plotting
+  dplyr,
+  tidyr,
+  ggplot2,
+  
+  # --- visualisation / maps
+  mapview,
+  mapedit,
+  tmap,
+  tmaptools,
+  colorspace,
+  
+  # --- web / OGC / APIs
+  httr,
+  OpenStreetMap,
+  ows4R,
+  link2GI,
+  jsonlite,
+  osmdata, 
+  rvest, 
+  data.table,
+  
+  # --- ML / classification (infrastructure only)
+  randomForest,
+  ranger,
+  e1071,
+  caret,
+  Rsagacmd,
+  bfast,
+  sp
+  
+)
+
+
+# raster bewusst NICHT attachen
+if (!requireNamespace("raster", quietly = TRUE)) {
+  install.packages("raster")
+}
+
 
 message("Project root: ", here::here())
 options(timeout = 600)
@@ -43,19 +102,21 @@ fs::dir_create(here("metadata"))
 fs::dir_create(here("docs"))
 fs::dir_create(here("src"))
 fs::dir_create(here("data", "raw", "dwd-stations"))
-fs::dir_create(here("data", "processed", "dwd"))
+fs::dir_create(here("data", "processed", "dwd-stations"))
 # -----------------------------
 # Global paths for DWD pipeline
 # -----------------------------
 path_dwd_raw      <- here::here("data", "raw", "dwd-stations")
-path_dwd_processed <- here::here("data", "processed", "dwd")
+path_dwd_processed <- here::here("data", "processed", "dwd-stations")
 root_folder <- here::here()
-source(here::here(root_folder,"src/01-fun-data-retrieval.R"))
+
+
+
 # -----------------------------
 # 2) Define Burgwald AOI (WGS84)
 # -----------------------------
 
-
+source(here::here("src", "01-fun-data-retrieval.R"))
 burgwald_bbox <- c(
   xmin = 8.70,
   xmax = 9.00,
@@ -65,14 +126,14 @@ burgwald_bbox <- c(
 
 aoi_burgwald_50km <- aoi_with_buffer(burgwald_bbox, buffer_km = 50)
 
-aoi_burgwald_wgs <- st_as_sfc(
-  st_bbox(burgwald_bbox, crs = 4326)
+aoi_burgwald_wgs <- sf::st_as_sfc(
+  sf::st_bbox(burgwald_bbox, crs = 4326)
 )
 
 # Save AOI for inspection / reuse
 aoi_file <- here("data", "processed", "aoi_burgwald.gpkg")
-st_write(
-  st_sf(geometry = aoi_burgwald_wgs),
+sf::st_write(
+  sf::st_sf(geometry = aoi_burgwald_wgs),
   aoi_file,
   delete_dsn = TRUE
 )
@@ -154,10 +215,43 @@ clc_legend <- data.frame(
 )
 
 # Color palettes for vegetation indices:
-# ndvi.col() returns a green–yellow sequential palette, reversed.
-ndvi.col <- function(n) {
-  rev(sequential_hcl(n, "Green-Yellow"))
+ndvi.col <- function(n) rev(colorspace::sequential_hcl(n, "Green-Yellow"))
+ano.col  <- colorspace::diverging_hcl(7, palette = "Red-Green", register = "rg")
+
+# ---- 0) Project-local temp dirs (portable, user-space) -----------------
+
+# Base temp dir inside the project (user-space, under version control only as .gitignore)
+proj_tmp_root <- here::here("tmp")
+
+# Allow override via environment variable (e.g. on cluster)
+custom_tmp <- Sys.getenv("BURGWALD_TMP_DIR", unset = NA_character_)
+if (!is.na(custom_tmp) && nzchar(custom_tmp)) {
+  proj_tmp_root <- custom_tmp
 }
-# ano.col is a red–green diverging palette fairly well for the bfast analysisi.
-ano.col  <- diverging_hcl(7, palette = "Red-Green",  register = "rg")
+
+# Subdirs for R / GDAL and terra
+r_tmp_dir     <- file.path(proj_tmp_root, "Rtmp")
+terra_tmp_dir <- file.path(proj_tmp_root, "terra")
+
+# Create dirs if they don't exist (user-space only)
+dir.create(r_tmp_dir,     showWarnings = FALSE, recursive = TRUE)
+dir.create(terra_tmp_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Point R / GDAL temp to project-local dir
+Sys.setenv(
+  TMPDIR = r_tmp_dir,
+  TEMP   = r_tmp_dir,
+  TMP    = r_tmp_dir
+)
+
+# Tell terra to use project-local temp dir
+terra::terraOptions(
+  tempdir = terra_tmp_dir,
+  memfrac = 0.2,   # fraction of RAM terra may use
+  todisk  = TRUE   # write big objects to disk instead of RAM
+)
+
+# Optional: clean old terra tmp-files from previous runs
+# Clean ALL old terra tmp-files (recommended)
+#terra::tmpFiles(orphan = TRUE, current = FALSE, old = FALSE, remove = TRUE)
 

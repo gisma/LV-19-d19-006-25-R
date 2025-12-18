@@ -379,6 +379,166 @@ dir_table_by_station_buf <- wind_for_openair_buf %>%
   ) %>%
   ungroup() %>%
   arrange(station, dir_class)
+## -------------------------------------------------------------------
+## B7) Spatial mean over buffer stations + split into summer / winter
+## -------------------------------------------------------------------
+# Definition:
+#   Here: Summer = April–September (months 4–9)
+#          Winter = October–March (10–12, 1–3)
+#   Adjust the month sets if you prefer another definition.
+
+wind_buf_season <- wind_for_openair_buf %>%
+  dplyr::mutate(
+    month = lubridate::month(date),
+    season2 = dplyr::if_else(
+      month %in% 4:9,
+      "Summer (Apr–Sep)",
+      "Winter (Oct–Mar)"
+    )
+  )
+
+# B7.1 Hourly time series: mean over all buffer stations
+#      - ws: arithmetic mean
+#      - wd: circular mean (mean_wdir_deg())
+wind_buf_mean_ts <- wind_buf_season %>%
+  dplyr::group_by(date, season2) %>%
+  dplyr::summarise(
+    ws = mean(ws, na.rm = TRUE),
+    wd = mean_wdir_deg(wd),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    station = "Buffer mean"  # synthetic station name
+  )
+
+# Optional: quick check
+message("First rows of buffer-mean time series (with summer/winter flag):")
+print(head(wind_buf_mean_ts))
+
+## -------------------------------------------------------------------
+## B8) Wind roses for buffer-mean, split by summer / winter
+## -------------------------------------------------------------------
+
+# B8.1 One wind rose per season (separate plots)
+windRose(
+  mydata = wind_buf_mean_ts,
+  ws     = "ws",
+  wd     = "wd",
+  type   = "season2",   # separate panel for Summer/Winter
+  angle  = 10,
+  paddle = FALSE,
+  key.position = "right"
+)
+
+# If you prefer separate calls instead of faceting, you can also do:
+# windRose(
+#   mydata = dplyr::filter(wind_buf_mean_ts, season2 == "Summer (Apr–Sep)"),
+#   ws     = "ws",
+#   wd     = "wd",
+#   angle  = 10,
+#   paddle = FALSE,
+#   key.position = "right",
+#   main   = "Buffer mean – Summer"
+# )
+#
+# windRose(
+#   mydata = dplyr::filter(wind_buf_mean_ts, season2 == "Winter (Oct–Mar)"),
+#   ws     = "ws",
+#   wd     = "wd",
+#   angle  = 10,
+#   paddle = FALSE,
+#   key.position = "right",
+#   main   = "Buffer mean – Winter"
+# )
+
+## -------------------------------------------------------------------
+## B9) Seasonal summary tables for buffer-mean series
+## -------------------------------------------------------------------
+
+# B9.1 Overall seasonal statistics (buffer mean)
+buffer_season_summary <- wind_buf_mean_ts %>%
+  dplyr::group_by(season2) %>%
+  dplyr::summarise(
+    n       = n(),
+    mean_ws = mean(ws, na.rm = TRUE),
+    mean_wd = mean_wdir_deg(wd),
+    .groups = "drop"
+  )
+
+
+message("Seasonal wind summary for buffer-mean series:")
+print(buffer_season_summary)
+
+
+#######################################################################
+# Seasonal and annual mean wind for Burgwald-buffer stations
+# (computed from wind_buf_mean_ts = spatially averaged time series)
+#######################################################################
+
+# Ensure seasons exist
+if(!all(c("Summer (Apr–Sep)", "Winter (Oct–Mar)") %in% unique(wind_buf_mean_ts$season2))) {
+  stop("Seasons missing in wind_buf_mean_ts")
+}
+
+# --- Helper for circular mean again (safe) ---
+mean_wdir_deg <- function(wd_deg) {
+  theta <- wd_deg * pi / 180
+  sin_mean <- mean(sin(theta), na.rm = TRUE)
+  cos_mean <- mean(cos(theta), na.rm = TRUE)
+  ang <- atan2(sin_mean, cos_mean) * 180 / pi
+  if (ang < 0) ang <- ang + 360
+  return(ang)
+}
+
+# ------------------------------
+# 1) SUMMER mean wind
+# ------------------------------
+summer_mean_wind <- wind_buf_mean_ts %>%
+  filter(season2 == "Summer (Apr–Sep)") %>%
+  summarise(
+    mean_ws = mean(ws, na.rm = TRUE),
+    mean_wd = mean_wdir_deg(wd),
+    n       = n()
+  )
+
+# ------------------------------
+# 2) WINTER mean wind
+# ------------------------------
+winter_mean_wind <- wind_buf_mean_ts %>%
+  filter(season2 == "Winter (Oct–Mar)") %>%
+  summarise(
+    mean_ws = mean(ws, na.rm = TRUE),
+    mean_wd = mean_wdir_deg(wd),
+    n       = n()
+  )
+
+# ------------------------------
+# 3) ANNUAL mean wind (all values)
+# ------------------------------
+annual_mean_wind <- wind_buf_mean_ts %>%
+  summarise(
+    mean_ws = mean(ws, na.rm = TRUE),
+    mean_wd = mean_wdir_deg(wd),
+    n       = n()
+  )
+
+# ------------------------------
+# 4) Combine in one clean table
+# ------------------------------
+wind_means_summary <- tibble::tibble(
+  period = c("Summer", "Winter", "Annual"),
+  mean_ws = c(summer_mean_wind$mean_ws,
+              winter_mean_wind$mean_ws,
+              annual_mean_wind$mean_ws),
+  mean_wd = c(summer_mean_wind$mean_wd,
+              winter_mean_wind$mean_wd,
+              annual_mean_wind$mean_wd)
+)
+
+message("=== Mean Wind Summary (Burgwald Buffer) ===")
+print(wind_means_summary)
+#######################################################################
+
 
 message("Direction-frequency table per station (stations inside Burgwald buffer):")
 print(dir_table_by_station_buf)
