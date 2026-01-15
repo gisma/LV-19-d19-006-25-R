@@ -221,7 +221,7 @@ cor_metrics <- stats::cor(metrics_num, use = "pairwise.complete.obs")
 lsp_cove_burgwald <- lsp_signature(
   x            = lc_burgwald,
   type         = "cove",
-  window       = 25,
+  window       = 20,
   normalization = "pdf"
 )
 
@@ -276,11 +276,11 @@ print(cor_metrics)
 # -> Indicates redundancy or independence between IT and classical metrics.
 
 # Additional suggested interactive checks (uncomment when needed):
-# mapview::mapview(grid_all_metrics_sf, zcol = "ent")       # composition H(x)
-# mapview::mapview(grid_all_metrics_sf, zcol = "relmutinf") # configuration U
-# mapview::mapview(grid_all_metrics_sf, zcol = "shdi")      # classical diversity
-# mapview::mapview(grid_all_metrics_sf, zcol = "ai")        # classical aggregation
-# mapview::mapview(lsp_clusters_sf, zcol = "cluster")       # pattern typologies
+mapview::mapview(grid_all_metrics_sf, zcol = "ent")       # composition H(x)
+mapview::mapview(grid_all_metrics_sf, zcol = "relmutinf") # configuration U
+mapview::mapview(grid_all_metrics_sf, zcol = "shdi")      # classical diversity
+mapview::mapview(grid_all_metrics_sf, zcol = "ai")        # classical aggregation
+#mapview::mapview(lsp_clusters_sf, zcol = "cluster")       # pattern typologies
 
 ############################################################
 # Objects created in the workspace:
