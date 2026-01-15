@@ -29,7 +29,7 @@
 # -----------------------------
 # 0) Packages
 # -----------------------------
-source(here::here("src", "00-setup-burgwald.R"))
+source(here::here("_core", "00-setup-burgwald.R"))
 
 
 # -----------------------------

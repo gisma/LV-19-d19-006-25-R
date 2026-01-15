@@ -90,7 +90,7 @@
 # - aoi_burgwald_wgs (sf polygon in EPSG:4326)
 # - burgwald_bbox    (bbox vector xmin/xmax/ymin/ymax)
 root_folder <- here::here()
-source(here::here("src", "00-setup-burgwald.R"))
+source(here::here("_core", "00-setup-burgwald.R"))
 
 
 ## ------------------------------------------------------------

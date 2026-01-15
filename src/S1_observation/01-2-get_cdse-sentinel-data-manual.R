@@ -49,7 +49,7 @@ if (length(inst) > 0) install.packages(inst)
 
 # Project-specific setup: AOI etc.
 # Expects aoi_burgwald_wgs and burgwald_bbox to be defined there.
-source(here::here("src", "00-setup-burgwald.R"))
+source(here::here("_core", "00-setup-burgwald.R"))
 
 # Optional: quick geometry sanity check
 bg <- ggplot() +

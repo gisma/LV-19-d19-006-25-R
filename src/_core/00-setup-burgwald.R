@@ -119,7 +119,7 @@ root_folder <- here::here()
 # 2) Define Burgwald AOI (WGS84)
 # -----------------------------
 
-source(here::here("src", "01-fun-data-retrieval.R"))
+source(here::here("_core", "01-fun-data-retrieval.R"))
 burgwald_bbox <- c(
   xmin = 8.70,
   xmax = 9.00,
