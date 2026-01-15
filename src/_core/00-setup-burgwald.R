@@ -16,6 +16,8 @@
 
 # -----------------------------
 # 0) Packages & project root
+
+
 if (!requireNamespace("pacman", quietly = TRUE)) {
   install.packages("pacman")
 }
@@ -59,7 +61,6 @@ pacman::p_load(
   httr,
   OpenStreetMap,
   ows4R,
-  link2GI,
   jsonlite,
   osmdata, 
   rvest, 
@@ -76,11 +77,13 @@ pacman::p_load(
   
 )
 
+remotes::install_github("r-spatial/link2GI",ref = "master")
+library(link2GI)
 
-# raster bewusst NICHT attachen
-if (!requireNamespace("raster", quietly = TRUE)) {
-  install.packages("raster")
-}
+# # raster bewusst NICHT attachen
+# if (!requireNamespace("raster", quietly = TRUE)) {
+#   install.packages("raster")
+# }
 
 
 message("Project root: ", here::here())

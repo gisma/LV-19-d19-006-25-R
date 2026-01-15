@@ -232,7 +232,7 @@ terra::values(lc_burgwald) <- round(terra::values(lc_burgwald))
 aoi_utm <- sf::st_transform(aoi_burgwald, 25832)  # EPSG:25832
 
 # Grid resolution (metres)
-grid_cellsize <- 2000  # 2 km × 2 km
+grid_cellsize <- 1000  # 2 km × 2 km
 
 # Create 2×2 km grid covering the AOI.
 # Each polygon is a candidate "unit landscape" for IT metrics.
