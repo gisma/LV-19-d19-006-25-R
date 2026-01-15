@@ -1,10 +1,10 @@
 #!/usr/bin/env Rscript
 
 # sourcing of the setup and specific used functions
-source("src/00-setup-burgwald.R")
+source("_core/00-setup-burgwald.R")
 
 # ---- helpers FIRST (create this file exactly as above) -----------------------
-source("src/metrics-fun.R")
+source("r-libs/metrics-fun.R")
 
 # ---------------------------------------------------------
 # 0) Inputs / outputs

@@ -46,7 +46,7 @@
 # SAGA-GIS Relief-Derivate mit Rsagacmd (sagacmd)
 # -------------------------------------------------------
 
-source(here::here("src", "00-setup-burgwald.R"))
+source(here::here("_core", "00-setup-burgwald.R"))
 
 
 # einmal global initialisieren
