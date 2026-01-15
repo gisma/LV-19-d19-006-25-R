@@ -50,7 +50,8 @@ library(lubridate)
 ## -------------------------------------------------------------------
 ## 1) Load hourly DWD wind data (ALL stations in file)
 ## -------------------------------------------------------------------
-
+# sourcing of the setup and specific used functions
+source("src/_core/00-setup-burgwald.R")
 wind_raw <- readRDS(
   here::here("data", "processed", "dwd-stations",
              "burgwald_hourly_wind_F-D_20231212_20251211.rds")

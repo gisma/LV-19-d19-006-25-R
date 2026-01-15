@@ -56,7 +56,7 @@
 #     gdalcubes processing chain; R only orchestrates the call.
 ############################################################
 
-source(here::here("_core", "00-setup-burgwald.R"))
+source(here::here("src","_core", "00-setup-burgwald.R"))
 
 # Set parallelisation for gdalcubes (adjust cores to your machine)
 gdalcubes_options(parallel = 12)

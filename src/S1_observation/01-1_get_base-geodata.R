@@ -39,7 +39,7 @@
 
 
 # sourcing of the setup and specific used funtions
-source("_core/00-setup-burgwald.R")
+source("src/_core/00-setup-burgwald.R")
 
 
 ############################################################
