@@ -64,7 +64,7 @@
 
 
 # sourcing of the setup and specific used funtions
-source("_core/00-setup-burgwald.R")
+source("src","_core/00-setup-burgwald.R")
 
 out_file <- file.path(root_folder, "data/burgwald_2018_2022_all.nc")
 
