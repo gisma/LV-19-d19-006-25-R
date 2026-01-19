@@ -1,1 +1,17 @@
+# Ignore everything that is not R package code
 data/
+tmp/
+cache/
+outputs/
+logs/
+docs/
+figures/
+*.tif
+*.nc
+*.rds
+*.zip
+*.gz
+*.gpkg  
+
+# Ignore terra scratch dirs (your case critical)
+tmp/terra/
