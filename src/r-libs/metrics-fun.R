@@ -401,83 +401,6 @@ adjusted_rand_index <- function(x, y) {
   (sum_nij - expected) / denom
 }
 
-# ---- Sample paired labels from two rasters (same grid) -----------------------
-# We sample cell indices from r_base and read both rasters at those cells.
-sample_label_pairs <- function(r_base, r_other, n = 2e5, seed = 1L) {
-  rb <- if (inherits(r_base, "SpatRaster")) r_base else terra::rast(r_base)
-  ro <- if (inherits(r_other, "SpatRaster")) r_other else terra::rast(r_other)
-  
-  stopifnot(terra::ncell(rb) == terra::ncell(ro))
-  
-  set.seed(as.integer(seed))
-  
-  nc <- terra::ncell(rb)
-  n  <- as.integer(min(n, nc))
-  
-  # sample cell indices directly (no terra coordinate math => no overflow)
-  cells <- sample.int(nc, size = n, replace = FALSE)
-  
-  xb <- terra::values(rb, cells = cells, mat = FALSE)
-  yb <- terra::values(ro, cells = cells, mat = FALSE)
-  
-  ok <- !is.na(xb) & !is.na(yb)
-  list(x = xb[ok], y = yb[ok])
-}
-
-# ---- Generate parameter perturbations around a base set ----------------------
-# Creates a small, symmetric candidate set around a base (spatialr,ranger,minsize):
-# - spatialr: +/- ds
-# - ranger  : +/- dr
-# - minsize : +/- dm
-# Then samples up to K candidates (deterministic).
-make_param_perturbations <- function(spatialr, ranger, minsize,
-                                     dr = 0.02, ds = 1L, dm = 20L, K = 8L) {
-  spatialr <- as.integer(spatialr)
-  minsize  <- as.integer(minsize)
-  ranger   <- as.numeric(ranger)
-  
-  dr <- as.numeric(dr)
-  ds <- as.integer(ds)
-  dm <- as.integer(dm)
-  K  <- as.integer(K)
-  
-  cand_spatialr <- unique(pmax(1L, spatialr + c(-ds, 0L, ds)))
-  cand_ranger   <- unique(pmax(1e-6, ranger + c(-dr, 0, dr)))
-  cand_minsize  <- unique(pmax(1L, minsize + c(-dm, 0L, dm)))
-  
-  cand <- expand.grid(
-    spatialr = cand_spatialr,
-    ranger   = cand_ranger,
-    minsize  = cand_minsize,
-    KEEP.OUT.ATTRS = FALSE,
-    stringsAsFactors = FALSE
-  )
-  
-  # drop the baseline itself
-  cand <- cand[!(
-    cand$spatialr == spatialr &
-      abs(cand$ranger - ranger) < 1e-12 &
-      cand$minsize == minsize
-  ), , drop = FALSE]
-  
-  if (nrow(cand) == 0) return(cand)
-  
-  if (nrow(cand) > K) {
-    set.seed(1L)
-    cand <- cand[sample(seq_len(nrow(cand)), size = K, replace = FALSE), , drop = FALSE]
-  }
-  
-  cand
-}
-
-# ---- Sample fixed cell indices once and reuse across rasters ---------------
-sample_label_cells <- function(r, n = 2e5, seed = 1L, keep_na = FALSE) {
-  stopifnot(inherits(r, "SpatRaster"))
-  set.seed(seed)
-  cells <- terra::spatSample(r, size = n, method = "random",
-                             as.points = FALSE, na.rm = !keep_na, values = FALSE)
-  as.integer(cells)
-}
 
 
 # ---- Compute ARI_prev: stability proxy for a base MeanShift parameter set ----
@@ -503,11 +426,16 @@ sample_label_cells <- function(r, n = 2e5, seed = 1L, keep_na = FALSE) {
 # FIX:
 #  - perturbation filenames are unique per BASELINE signature (no cross-scale collisions)
 #  - optional cleanup to prevent tmp explosion
+# ---- Compute ARI_prev: stability proxy for a base MeanShift parameter set ----
+# FIX:
+#  - perturbation filenames are unique per BASELINE signature (no cross-scale collisions)
+#  - optional cleanup to prevent tmp explosion
 compute_ari_prev <- function(otblink, feat_raster,
                              out_dir_tmp,
                              spatialr, ranger, minsize,
                              perturb = list(dr = 0.02, ds = 1L, dm = 20L, K = 8L, minsize_floor_frac = 0.8),
                              sample_fact = 4L,
+                             n_samp = 200000L,
                              seed = 1L,
                              tilesize = 256L,
                              ram = NULL,
@@ -530,7 +458,7 @@ compute_ari_prev <- function(otblink, feat_raster,
   
   log("ARI_prev start | base: ",
       sprintf("s=%d r=%.4f m=%d", spatialr, ranger, minsize),
-      " | sample_fact=", sample_fact)
+      " | sample_fact=", sample_fact, " | n_samp=", as.integer(n_samp))
   
   # ---- baseline -------------------------------------------------------------
   base_file <- file.path(
@@ -560,7 +488,7 @@ compute_ari_prev <- function(otblink, feat_raster,
   r_base <- terra::rast(base_file)
   
   # ---- build coarse template (near resample only) ---------------------------
-  log("Aggregating baseline labels ...")
+  log("Asample_facggregating baseline labels ...")
   t0 <- Sys.time()
   
   if (is.null(sample_fact) || sample_fact <= 1L) {
@@ -633,9 +561,17 @@ compute_ari_prev <- function(otblink, feat_raster,
     y_other <- terra::values(r_other_small, mat = FALSE)
     log("  Aggregation done in ", sec(t0), " s")
     
-    # --- ARI ---
+    # --- ARI (sampled pixel set) ---
     t0 <- Sys.time()
-    ari_vec[i] <- adjusted_rand_index(x_base, y_other)
+    keep <- which(!is.na(x_base) & !is.na(y_other))
+    if (length(keep) == 0) {
+      ari_vec[i] <- NA_real_
+    } else {
+      set.seed(as.integer(seed) + as.integer(i))
+      k <- min(as.integer(n_samp), length(keep))
+      idx <- sample(keep, size = k, replace = FALSE)
+      ari_vec[i] <- adjusted_rand_index(x_base[idx], y_other[idx])
+    }
     log("  ARI = ", round(ari_vec[i], 4), " | computed in ", round(sec(t0), 3), " s")
     
     rm(r_other, r_other_small)
@@ -660,6 +596,12 @@ compute_ari_prev <- function(otblink, feat_raster,
 
 
 
+# ---- Generate parameter perturbations around a base set ----------------------
+# FIX/EXT:
+# - supports adaptive (relative) perturbations:
+#     dr_rel = fraction of ranger (e.g. 0.10 -> +/-10%)
+#     dm_rel = fraction of minsize (e.g. 0.20 -> +/-20%)
+# - optional spatialr locking for small scales (prevents s=1/2/3 "mode flips")
 make_param_perturbations <- function(spatialr, ranger, minsize,
                                      dr = NULL, ds = 1L, dm = NULL, K = 8L,
                                      minsize_floor_frac = 0.8) {
@@ -667,9 +609,9 @@ make_param_perturbations <- function(spatialr, ranger, minsize,
   minsize  <- as.integer(minsize)
   ranger   <- as.numeric(ranger)
   
-  # adaptive defaults
-  if (is.null(dr)) dr <- max(0.005, 0.10 * ranger)           # 10% ranger, min 0.005
-  if (is.null(dm)) dm <- max(5L, as.integer(round(0.20 * minsize)))  # 20% minsize, min 5
+  # adaptive defaults if dr/dm not provided
+  if (is.null(dr)) dr <- max(0.005, 0.10 * ranger)
+  if (is.null(dm)) dm <- max(5L, as.integer(round(0.20 * minsize)))
   
   dr <- as.numeric(dr)
   ds <- as.integer(ds)
@@ -680,8 +622,8 @@ make_param_perturbations <- function(spatialr, ranger, minsize,
   if (spatialr <= 3L) ds <- 0L
   
   cand_spatialr <- unique(pmax(1L, spatialr + c(-ds, 0L, ds)))
-  cand_ranger   <- unique(pmax(1e-6, ranger + c(-dr, 0, dr)))
-  cand_minsize  <- unique(pmax(1L, minsize + c(-dm, 0L, dm)))
+  cand_ranger   <- unique(pmax(1e-6, ranger   + c(-dr, 0, dr)))
+  cand_minsize  <- unique(pmax(1L,  minsize  + c(-dm, 0L, dm)))
   
   cand <- expand.grid(
     spatialr = cand_spatialr,
@@ -700,7 +642,7 @@ make_param_perturbations <- function(spatialr, ranger, minsize,
   
   if (nrow(cand) == 0) return(cand)
   
-  # prevent minsize collapsing too far (kills the "m=10" cases)
+  # clamp minsize: prevent collapse (e.g. m=10 for base m=30)
   floor_m <- as.integer(round(minsize * minsize_floor_frac))
   cand$minsize <- pmax(floor_m, as.integer(cand$minsize))
   
@@ -712,6 +654,8 @@ make_param_perturbations <- function(spatialr, ranger, minsize,
   
   cand
 }
+
+
 
 
 
@@ -862,59 +806,6 @@ assign_ranger_to_scales <- function(scales, ranger_candidates) {
 
 
 
-
-make_param_perturbations <- function(spatialr, ranger, minsize,
-                                     dr = NULL, ds = 1L, dm = NULL, K = 8L,
-                                     minsize_floor_frac = 0.8) {
-  spatialr <- as.integer(spatialr)
-  minsize  <- as.integer(minsize)
-  ranger   <- as.numeric(ranger)
-  
-  # adaptive defaults if dr/dm not provided
-  if (is.null(dr)) dr <- max(0.005, 0.10 * ranger)
-  if (is.null(dm)) dm <- max(5L, as.integer(round(0.20 * minsize)))
-  
-  dr <- as.numeric(dr)
-  ds <- as.integer(ds)
-  dm <- as.integer(dm)
-  K  <- as.integer(K)
-  
-  # local stability: don't allow s-1 at very small spatialr
-  if (spatialr <= 3L) ds <- 0L
-  
-  cand_spatialr <- unique(pmax(1L, spatialr + c(-ds, 0L, ds)))
-  cand_ranger   <- unique(pmax(1e-6, ranger   + c(-dr, 0, dr)))
-  cand_minsize  <- unique(pmax(1L,  minsize  + c(-dm, 0L, dm)))
-  
-  cand <- expand.grid(
-    spatialr = cand_spatialr,
-    ranger   = cand_ranger,
-    minsize  = cand_minsize,
-    KEEP.OUT.ATTRS = FALSE,
-    stringsAsFactors = FALSE
-  )
-  
-  # drop baseline
-  cand <- cand[!(
-    cand$spatialr == spatialr &
-      abs(cand$ranger - ranger) < 1e-12 &
-      cand$minsize == minsize
-  ), , drop = FALSE]
-  
-  if (nrow(cand) == 0) return(cand)
-  
-  # clamp minsize: prevent collapse (e.g. m=10 for base m=30)
-  floor_m <- as.integer(round(minsize * minsize_floor_frac))
-  cand$minsize <- pmax(floor_m, as.integer(cand$minsize))
-  
-  # deterministic subsample to K
-  if (nrow(cand) > K) {
-    set.seed(1L)
-    cand <- cand[sample(seq_len(nrow(cand)), size = K, replace = FALSE), , drop = FALSE]
-  }
-  
-  cand
-}
 
 make_adaptive_perturb <- function(spatialr, ranger, minsize,
                                   K = 8L,

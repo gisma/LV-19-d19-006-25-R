@@ -1,0 +1,172 @@
+---
+title: "S5 Selector — From Segment Signatures to Spatial Candidate Sets"
+format: html
+---
+
+
+The S5 selector converts the segment signature space into concrete spatial candidate sets.
+It does not compute new metrics, clusters, or models.
+Its role is to translate a spatial question into a reproducible selection rule.
+
+A selector setting expresses:
+
+> **where selection is allowed, what must be represented, and how strongly candidates must be spatially separated.**
+
+Segments already carry meaning through their signatures
+(cover fractions, domain strata, representativeness distances).
+The selector only interprets these attributes.
+
+
+
+## Typical Use Cases and Parameter Settings
+
+Each use case corresponds directly to one selector setting.
+Only the parameters below need to be changed.
+
+
+
+### Use Case 1 — Forest Monitoring Network
+
+**Question**
+Where should monitoring sites be placed inside forest stands so that different terrain situations are represented and sites remain spatially independent?
+
+**Parameter setting**
+
+```R
+filter_expr   = "cov_forest >= 0.8"
+target_col    = "physio_stratum"
+rank_cols     = c("physio_dist_to_center")
+n_per_target  = 3
+d_min_m       = 500
+```
+
+**Interpretation**
+
+* Only forest-dominated segments are admissible.
+* Physiographic domains define what must be covered.
+* Typical segments per domain are preferred.
+* Sites are spatially separated by at least 500 m.
+
+
+
+### Use Case 2 — Forest vs Non-Forest Comparison
+
+**Question**
+How do forest and non-forest areas differ under identical sampling logic?
+
+Two selector runs are executed with identical targets and spacing, only the filter changes.
+
+**Forest run**
+
+```R
+filter_expr   = "cov_forest >= 0.8"
+target_col    = "physio_stratum"
+rank_cols     = c("physio_dist_to_center")
+n_per_target  = 3
+d_min_m       = 500
+```
+
+**Non-forest run**
+
+```R
+filter_expr   = "cov_forest < 0.2"
+target_col    = "physio_stratum"
+rank_cols     = c("physio_dist_to_center")
+n_per_target  = 3
+d_min_m       = 500
+```
+
+**Interpretation**
+
+* Both selections cover identical physiographic domains.
+* Differences arise purely from land-cover context.
+* Results are directly comparable.
+
+
+
+### Use Case 3 — Land-Use / Land-Cover Representation
+
+**Question**
+How can different land-use compositions be spatially represented without dominance by a single class?
+
+**Parameter setting**
+
+```R
+filter_expr   = NULL
+target_col    = "cov_stratum"
+rank_cols     = c("cov_dist_to_center", "physio_dist_to_center")
+n_per_target  = 3
+d_min_m       = 500
+```
+
+**Interpretation**
+
+* All segments are admissible.
+* LUCC clusters define representation units.
+* Typical land-use compositions are preferred.
+* Physiography acts as a secondary stabilizer.
+* Spatial thinning avoids clustering.
+
+
+
+### Use Case 4 — Watershed-Internal Sampling
+
+**Question**
+How should hydrological positions be sampled inside a single watershed?
+
+**Parameter setting**
+
+```R
+filter_expr   = "watershed_major == <WATERSHED_ID>"
+target_col    = "hydro_stratum"
+rank_cols     = c("hydro_dist_to_center")
+n_per_target  = 3
+d_min_m       = 500
+```
+
+**Interpretation**
+
+* Selection is restricted to one watershed.
+* Hydrological domains define representation.
+* Typical drainage positions are preferred.
+* Spatial spacing ensures internal coverage.
+
+
+
+## Why Forest Filtering and LUCC Are Not Redundant
+
+Forest filtering answers a binary question:
+
+> Is this segment forest or not?
+
+LUCC strata answer a typological question:
+
+> Which land-use composition type does this segment represent?
+
+Forest filtering defines admissibility.
+LUCC defines representation.
+
+They operate on different semantic levels and can be combined or used independently.
+
+
+
+## What the Outputs Represent
+
+Each setting produces:
+
+* a polygon layer of selected segments,
+* a point layer of candidate locations inside those segments.
+
+These layers encode a spatial interpretation of the analytical question, not just a technical result.
+
+
+
+## Core Idea
+
+The selector formalizes spatial intent:
+
+* restrict the spatial domain,
+* ensure coverage of relevant landscape situations,
+* enforce spatial independence.
+
+This keeps spatial decisions transparent, reproducible, and adaptable across studies.

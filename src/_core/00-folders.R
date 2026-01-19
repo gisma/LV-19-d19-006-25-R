@@ -21,7 +21,8 @@ burgwald_folders <- function() {
     "data/productive/S1_observation/",
     "data/productive/S2_features/",
     "data/productive/S3_structure/",
-    "data/productive/S4_decision/",
+    "data/productive/S4_signatures/",
+    "data/productive/S5_decisions/",
     "data/productive/S5_validation/",
     
     # project misc

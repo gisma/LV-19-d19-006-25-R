@@ -166,6 +166,7 @@ for (i in seq_len(nrow(scales))) {
     minsize     = s$minsize,
     perturb     = pert,
     sample_fact = 4L,
+    n_samp      = 200000L,
     seed        = 1L,
     tilesize    = 1024L,
     ram         = 32768,
@@ -198,7 +199,7 @@ readr::write_csv(metrics_df, metrics_file)
 
 
 ## -------------------------------------------------------------------
-## 7) Select best scale (max ARI_prev)
+## 7) Select best scale (stability score: max(ari_prev - 0.5 * ari_sd))
 ## -------------------------------------------------------------------
 best_id <- metrics_df %>%
   arrange(desc(score)) %>%
