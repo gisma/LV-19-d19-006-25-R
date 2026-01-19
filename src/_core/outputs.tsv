@@ -1,0 +1,58 @@
+S	key	topic	ext
+# --- S1 observation contracts ---
+S1_observation	aoi_dgm	topography	tif
+S1_observation	aoi_clc	landcover	tif
+S1_observation	osm_by_key	osm	dir
+S1_observation	cdse_pred_stack	            predictors	        tif
+S1_observation	training_polygons	        training	        gpkg
+# --- S2 observation contracts ---
+
+S2_features	wind_for_openair_all	forcing	rds
+S2_features	wind_for_openair_buf	forcing	rds
+
+S2_features	overall_summary_all	forcing	rds
+S2_features	station_summary_all	forcing	rds
+S2_features	dir_table_overall_all	forcing	rds
+S2_features	dir_table_by_station_all	forcing	rds
+
+S2_features	overall_summary_buf	forcing	rds
+S2_features	station_summary_buf	forcing	rds
+S2_features	dir_table_overall_buf	forcing	rds
+S2_features	dir_table_by_station_buf	forcing	rds
+
+S2_features	wind_buf_mean_ts	forcing	rds
+S2_features	wind_means_summary	forcing	rds
+
+S2_features	windrose_all_combined	figures	png
+S2_features	windrose_all_by_station	figures	png
+S2_features	windrose_all_panel	figures	png
+
+S2_features	windrose_buf_combined	figures	png
+S2_features	windrose_buf_by_station	figures	png
+S2_features	windrose_buf_panel	figures	png
+
+S2_features	windrose_buf_mean_season	figures	png
+
+
+S2_features	    classification_kmeans	    classification	    tif
+S2_features	    classification_mlc	        classification	    tif
+S2_features	    classification_rf	        classification	    tif
+S2_features	    classification_rf_model	    classification	    rds
+S2_features	    classification_rf_confusion	classification	    rds
+S2_features	s2_pred_stack_2018	remote_sensing	tif
+S2_features	s2_pred_stack_2019	remote_sensing	tif
+S2_features	s2_pred_stack_2020	remote_sensing	tif
+S2_features	s2_pred_stack_2021	remote_sensing	tif
+S2_features	s2_pred_stack_2022	remote_sensing	tif
+S2_features	s2_gdalcubes_cube_2018_2022_all	remote_sensing	nc
+S2_features	s2_kndvi_mean_2018_2022	remote_sensing	tif
+S2_features	relief_stack_10m	topography	tif
+S2_features	s2_cube_monthly_2018_2022	remote_sensing	nc
+
+# --- S3 observation contracts ---
+
+S3_structure	s2_bfast_kndvi_results	remote_sensing	nc
+S3_structure	layer0_zscore_stack	features	tif
+S3_structure	layer0_pca_features	features	tif
+S3_structure	layer0_meanshift_metrics	metrics	csv
+S3_structure	layer0_segments	segments	gpkg

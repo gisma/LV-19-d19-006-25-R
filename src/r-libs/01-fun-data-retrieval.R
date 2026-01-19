@@ -343,83 +343,47 @@ burgwald_get_hourly_dwd <- function(var        = c("precipitation", "wind"),
                                     write_csv  = TRUE,
                                     write_rds  = TRUE) {
   
-  # Match var against allowed options
   var <- match.arg(var)
   
-  # ---- Parameter mapping: user-friendly names -> actual DWD column names ----
   if (var == "precipitation") {
-    # Product: produkt_rr_stunde_*.txt
-    # Column "R1" = hourly precipitation (mm)
-    # Allow either "RR" or "R1" as input, both map to "R1"
     param_map <- c("RR" = "R1", "R1" = "R1")
-  }
-  
-  if (var == "wind") {
-    # Product: produkt_ff_stunde_*.txt
-    # Columns:
-    #   F = wind speed (m/s)
-    #   D = wind direction (degrees)
-    # Allow "FF"/"DD" or "F"/"D" as input
+  } else {
     param_map <- c("FF" = "F", "DD" = "D", "F" = "F", "D" = "D")
   }
   
-  # Map requested params to real column names
   params <- unname(param_map[params])
-  # Drop any params that could not be mapped
   params <- params[!is.na(params)]
-  if (!length(params)) {
-    stop("No valid parameters specified for var = '", var, "'.")
-  }
+  if (!length(params)) stop("No valid parameters specified for var = '", var, "'.")
   
-  # ---- Project directories via here::here() ---------------------------------
   raw_dir  <- here::here("data", "raw",       "dwd-stations")
   proc_dir <- here::here("data", "processed", "dwd-stations")
-  fs::dir_create(raw_dir)
-  fs::dir_create(proc_dir)
+  fs::dir_create(raw_dir,  recurse = TRUE)
+  fs::dir_create(proc_dir, recurse = TRUE)
   
-  # ---- AOI checks and buffer ------------------------------------------------
   stopifnot(inherits(aoi_wgs, c("sf", "sfc")))
-  if (inherits(aoi_wgs, "sf")) {
-    aoi_geom <- sf::st_geometry(aoi_wgs)
-  } else {
-    aoi_geom <- aoi_wgs
-  }
+  aoi_geom <- if (inherits(aoi_wgs, "sf")) sf::st_geometry(aoi_wgs) else aoi_wgs
   if (is.na(sf::st_crs(aoi_geom))) stop("AOI has no CRS.")
-  if (sf::st_crs(aoi_geom)$epsg != 4326) {
-    stop("AOI must be in EPSG:4326 (WGS84).")
-  }
+  if (sf::st_crs(aoi_geom)$epsg != 4326) stop("AOI must be in EPSG:4326 (WGS84).")
   
-  # Buffer AOI in meters using a metric CRS
   aoi_buf <- aoi_geom |>
     sf::st_transform(3857) |>
     sf::st_buffer(buffer_km * 1000) |>
     sf::st_transform(4326)
   
-  bbox <- sf::st_bbox(aoi_buf)
-  message("AOI+buffer bbox: ", paste(round(bbox, 3), collapse = ", "))
-  
-  # Normalize dates
   start_date <- as.Date(start_date)
   end_date   <- as.Date(end_date)
-  message("Using time range: ", start_date, " – ", end_date)
   
-  # ---- DWD base URLs for hourly products -----------------------------------
   base_http <- paste0(
     "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/",
     var, "/"
   )
   
-  # Always use both historical and recent in one go
   types <- c("historical", "recent")
   
-  meta_df  <- NULL  # station metadata table
+  meta_df  <- NULL
   all_urls <- character(0)
   
-  # --------------------------------------------------------------------------
-  # 1) Read station metadata + collect ZIP URLs
-  # --------------------------------------------------------------------------
   for (ty in types) {
-    message("Listing: ", var, " / ", ty)
     
     type_url <- paste0(base_http, ty, "/")
     
@@ -427,123 +391,66 @@ burgwald_get_hourly_dwd <- function(var        = c("precipitation", "wind"),
       rvest::html_elements("a") |>
       rvest::html_attr("href")
     
-    # Station description: *_Stundenwerte_Beschreibung_Stationen.txt
     if (is.null(meta_df)) {
-      desc_file <- grep("_Stundenwerte_Beschreibung_Stationen", file_listing,
-                        value = TRUE)
-      if (!length(desc_file)) {
-        stop("No station description found for var = '", var, "'.")
-      }
+      desc_file <- grep("_Stundenwerte_Beschreibung_Stationen", file_listing, value = TRUE)
+      if (!length(desc_file)) stop("No station description found for var = '", var, "'.")
       
       desc_url <- paste0(type_url, desc_file[1])
       
-      # Fixed-width table as published by DWD
       meta_df <- utils::read.fwf(
         desc_url,
         widths = c(6, 9, 9, 15, 12, 10, 41, 41, 4),
-        skip   = 2,
+        skip = 2,
         col.names = c(
           "Stations_id", "von_datum", "bis_datum", "Stationshoehe",
           "geoBreite", "geoLaenge", "Stationsname", "Bundesland", "Abgabe"
         ),
-        strip.white  = TRUE,
+        strip.white = TRUE,
         fileEncoding = "Latin1"
       )
     }
     
-    # ZIP files: stundenwerte_*.zip
     zip_files <- grep("^stundenwerte_.*\\.zip$", file_listing, value = TRUE)
-    if (!length(zip_files)) {
-      warning("No ZIP files found in ", type_url)
-      next
+    if (length(zip_files)) {
+      all_urls <- c(all_urls, paste0(type_url, zip_files))
     }
-    
-    urls <- paste0(type_url, zip_files)
-    all_urls <- c(all_urls, urls)
   }
   
   if (is.null(meta_df)) stop("Failed to read station metadata.")
   if (!length(all_urls)) stop("No ZIP URLs found (historical + recent).")
   
-  # --------------------------------------------------------------------------
-  # 2) Build station sf layer and filter to AOI+buffer
-  # --------------------------------------------------------------------------
   meta_df$geoBreite <- as.numeric(meta_df$geoBreite)
   meta_df$geoLaenge <- as.numeric(meta_df$geoLaenge)
   
-  stations_sf <- sf::st_as_sf(
-    meta_df,
-    coords = c("geoLaenge", "geoBreite"),
-    crs    = 4326
-  )
+  stations_sf <- sf::st_as_sf(meta_df, coords = c("geoLaenge", "geoBreite"), crs = 4326)
+  stations_aoi <- suppressWarnings(sf::st_join(stations_sf, sf::st_as_sf(aoi_buf), join = sf::st_within))
+  stations_aoi <- stations_aoi[!is.na(stations_aoi$Abgabe), ]
+  if (!nrow(stations_aoi)) stop("No DWD stations within AOI+buffer.")
   
-  inside <- sf::st_intersects(stations_sf, aoi_buf, sparse = FALSE)[, 1]
-  stations_aoi <- stations_sf[inside, ]
-  if (!nrow(stations_aoi)) stop("No stations found inside AOI + buffer.")
+  station_ids <- sprintf("%05d", as.integer(stations_aoi$Stations_id))
   
-  # Normalize station IDs to 5-digit strings
-  stations_aoi$Stations_id <- as.character(stations_aoi$Stations_id)
-  stations_aoi$Stations_id <- sprintf("%05d", as.integer(stations_aoi$Stations_id))
-  station_ids <- unique(stations_aoi$Stations_id)
-  
-  # --------------------------------------------------------------------------
-  # 3) Filter ZIP URLs to AOI stations (by station ID in filename)
-  # --------------------------------------------------------------------------
-  zip_station_ids <- sub(
-    pattern = "^stundenwerte_[A-Z]+_(\\d{5})_.*\\.zip$",
-    replacement = "\\1",
-    x = basename(all_urls)
-  )
-  
-  keep <- zip_station_ids %in% station_ids
-  urls_keep <- all_urls[keep]
-  if (!length(urls_keep)) {
-    stop("No ZIP files found for AOI stations.")
-  }
-  
-  message("ZIPs for AOI stations: ", length(urls_keep))
-  
-  # --------------------------------------------------------------------------
-  # 4) Download missing ZIPs
-  # --------------------------------------------------------------------------
-  zip_paths <- file.path(raw_dir, basename(urls_keep))
-  
-  for (i in seq_along(urls_keep)) {
+  zip_paths <- file.path(raw_dir, basename(all_urls))
+  for (i in seq_along(all_urls)) {
     if (!file.exists(zip_paths[i])) {
-      message("Download: ", basename(zip_paths[i]))
-      utils::download.file(
-        urls_keep[i],
-        destfile = zip_paths[i],
-        mode     = "wb",
-        quiet    = FALSE
-      )
-    } else {
-      message("✔ Already present: ", basename(zip_paths[i]))
+      utils::download.file(all_urls[i], zip_paths[i], mode = "wb", quiet = TRUE)
     }
   }
-  
   zip_paths <- zip_paths[file.exists(zip_paths)]
-  if (!length(zip_paths)) stop("No local ZIP files available.")
+  if (!length(zip_paths)) stop("No ZIP files available after download.")
   
-  # --------------------------------------------------------------------------
-  # 5) Unzip product files, read data, filter by station and time
-  # --------------------------------------------------------------------------
   data_list <- list()
   unzip_dir <- file.path(raw_dir, paste0("unzipped_hourly_", var))
-  fs::dir_create(unzip_dir)
+  fs::dir_create(unzip_dir, recurse = TRUE)
   
   for (zp in zip_paths) {
     txt_files <- utils::unzip(zp, exdir = unzip_dir)
-    # Only keep produkt_*.txt files
     txt_files <- txt_files[grepl("^produkt_.*\\.txt$", basename(txt_files))]
     if (!length(txt_files)) next
     
     for (tf in txt_files) {
       df <- tryCatch(
         utils::read.table(
-          tf,
-          sep       = ";",
-          header    = TRUE,
+          tf, sep = ";", header = TRUE,
           stringsAsFactors = FALSE,
           na.strings = c("-999", "-9999", "-999.0", "-9999.0")
         ),
@@ -552,27 +459,16 @@ burgwald_get_hourly_dwd <- function(var        = c("precipitation", "wind"),
       if (is.null(df)) next
       if (!"STATIONS_ID" %in% names(df) || !"MESS_DATUM" %in% names(df)) next
       
-      # Keep only stations in AOI
-      df$STATIONS_ID <- as.character(df$STATIONS_ID)
       df$STATIONS_ID <- sprintf("%05d", as.integer(df$STATIONS_ID))
       df <- df[df$STATIONS_ID %in% station_ids, ]
       if (!nrow(df)) next
       
-      # Convert MESS_DATUM (YYYYMMDDHH) to POSIXct
-      df$datetime <- as.POSIXct(
-        strptime(as.character(df$MESS_DATUM), "%Y%m%d%H", tz = "UTC")
-      )
-      df <- df[
-        df$datetime >= as.POSIXct(start_date) &
-          df$datetime <  as.POSIXct(end_date + 1),
-      ]
+      df$datetime <- as.POSIXct(strptime(as.character(df$MESS_DATUM), "%Y%m%d%H", tz = "UTC"))
+      df <- df[df$datetime >= as.POSIXct(start_date) & df$datetime < as.POSIXct(end_date + 1), ]
       if (!nrow(df)) next
       
-      # Keep only the requested parameter columns that actually exist
       keep_params <- intersect(params, names(df))
-      if (!length(keep_params)) {
-        next
-      }
+      if (!length(keep_params)) next
       
       df <- df[, c("STATIONS_ID", "MESS_DATUM", "datetime", keep_params), drop = FALSE]
       data_list[[length(data_list) + 1]] <- df
@@ -586,44 +482,40 @@ burgwald_get_hourly_dwd <- function(var        = c("precipitation", "wind"),
   
   dat <- data.table::rbindlist(data_list, fill = TRUE)
   
-  # --------------------------------------------------------------------------
-  # 6) Join station metadata (sf) with time series data
-  # --------------------------------------------------------------------------
   stations_aoi$STATIONS_ID <- sprintf("%05d", as.integer(stations_aoi$Stations_id))
+  stations_used <- stations_aoi[stations_aoi$STATIONS_ID %in% unique(dat$STATIONS_ID), ]
   
-  station_ids_data <- unique(dat$STATIONS_ID)
-  stations_used    <- stations_aoi[stations_aoi$STATIONS_ID %in% station_ids_data, ]
+  merged_sf <- merge(stations_used, dat, by = "STATIONS_ID")
   
-  merged_sf <- merge(
-    stations_used,
-    dat,
-    by = "STATIONS_ID"
-  )
-  
-  # --------------------------------------------------------------------------
-  # 7) Write CSV and RDS if requested
-  # --------------------------------------------------------------------------
+  # --- filenames -----------------------------------------------------------
   stub <- paste0(
     "burgwald_hourly_", var, "_",
     paste(params, collapse = "-"), "_",
     format(start_date, "%Y%m%d"), "_",
-    format(end_date,   "%Y%m%d")
+    format(end_date, "%Y%m%d")
   )
   
   if (write_csv) {
     csv_file <- file.path(raw_dir, paste0(stub, ".csv"))
     data.table::fwrite(sf::st_drop_geometry(merged_sf), csv_file, dec = ".")
-    message("CSV written: ", csv_file)
   }
   
   if (write_rds) {
-    rds_file <- file.path(proc_dir, paste0(stub, ".rds"))
-    saveRDS(merged_sf, rds_file)
-    message("RDS written: ", rds_file)
+    # canonical if available, else fallback to processed/
+    out_key <- if (var == "wind") "dwd_hourly_wind" else "dwd_hourly_precip"
+    if (exists("paths", inherits = TRUE) && !is.null(paths[[out_key]])) {
+      rds_file <- paths[[out_key]]
+      fs::dir_create(dirname(rds_file), recurse = TRUE)
+      saveRDS(merged_sf, rds_file)
+    } else {
+      rds_file <- file.path(proc_dir, paste0(stub, ".rds"))
+      saveRDS(merged_sf, rds_file)
+    }
   }
   
   merged_sf
 }
+
 
 #' Burgwald: DWD subhourly precipitation (10 min / 5 min) for AOI + buffer
 #'
@@ -665,19 +557,22 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
                                           buffer_km  = 50,
                                           write_csv  = TRUE,
                                           write_rds  = TRUE) {
+  
   resolution <- match.arg(resolution)
   
   # Map resolution to DWD directory and main precip column
   if (resolution == "10min") {
-    res_dir      <- "10_minutes"
-    precip_col   <- "RWS_10"
-    desc_file    <- "zehn_min_rr_Beschreibung_Stationen.txt"
-    zip_pattern  <- "^10minutenwerte_nieder_.*\\.zip$"
+    res_dir     <- "10_minutes"
+    precip_col  <- "RWS_10"
+    desc_file   <- "zehn_min_rr_Beschreibung_Stationen.txt"
+    zip_pattern <- "^10minutenwerte_nieder_.*\\.zip$"
+    out_key     <- "dwd_precip_10min"
   } else {
-    res_dir      <- "5_minutes"
-    precip_col   <- "RS_05"
-    desc_file    <- "5min_rr_Beschreibung_Stationen.txt"
-    zip_pattern  <- "^5minutenwerte_nieder_.*\\.zip$"
+    res_dir     <- "5_minutes"
+    precip_col  <- "RS_05"
+    desc_file   <- "5min_rr_Beschreibung_Stationen.txt"
+    zip_pattern <- "^5minutenwerte_nieder_.*\\.zip$"
+    out_key     <- "dwd_precip_5min"
   }
   
   # Base HTTP directory for this resolution and precipitation
@@ -686,38 +581,25 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
     res_dir, "/precipitation/"
   )
   
-  # Project paths (align with your setup)
-  raw_dir  <- here::here("data", "raw",       "dwd-stations")
-  proc_dir <- here::here("data", "processed", "dwd-stations")
-  fs::dir_create(raw_dir)
-  fs::dir_create(proc_dir)
+  # RAW provider cache
+  raw_dir <- here::here("data", "raw", "providers", "dwd")
+  fs::dir_create(raw_dir, recurse = TRUE)
   
-  # --- AOI and buffer handling ----------------------------------------------
+  # --- AOI and buffer handling ---------------------------------------------
   stopifnot(inherits(aoi_wgs, c("sf", "sfc")))
-  if (inherits(aoi_wgs, "sf")) {
-    aoi_geom <- sf::st_geometry(aoi_wgs)
-  } else {
-    aoi_geom <- aoi_wgs
-  }
+  aoi_geom <- if (inherits(aoi_wgs, "sf")) sf::st_geometry(aoi_wgs) else aoi_wgs
   if (is.na(sf::st_crs(aoi_geom))) stop("AOI has no CRS.")
-  if (sf::st_crs(aoi_geom)$epsg != 4326) {
-    stop("AOI must be in EPSG:4326 (WGS84).")
-  }
+  if (sf::st_crs(aoi_geom)$epsg != 4326) stop("AOI must be in EPSG:4326 (WGS84).")
   
-  # Buffer AOI in a metric CRS and back-transform to WGS84
   aoi_buf <- aoi_geom |>
     sf::st_transform(3857) |>
     sf::st_buffer(buffer_km * 1000) |>
     sf::st_transform(4326)
   
-  bbox <- sf::st_bbox(aoi_buf)
-  message("AOI+buffer bbox: ", paste(round(bbox, 3), collapse = ", "))
-  
   start_date <- as.Date(start_date)
   end_date   <- as.Date(end_date)
-  message("Using time range: ", start_date, " – ", end_date)
   
-  # --- 1) Read station metadata (Beschreibung_Stationen) ---------------------
+  # --- 1) Read station metadata --------------------------------------------
   desc_url <- paste0(base_http, "historical/", desc_file)
   
   meta_df <- utils::read.fwf(
@@ -732,52 +614,36 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
     fileEncoding = "Latin1"
   )
   
-  # Convert coordinates to numeric and build sf point layer
   meta_df$geoBreite <- as.numeric(meta_df$geoBreite)
   meta_df$geoLaenge <- as.numeric(meta_df$geoLaenge)
   
-  stations_sf <- sf::st_as_sf(
-    meta_df,
-    coords = c("geoLaenge", "geoBreite"),
-    crs    = 4326
-  )
+  stations_sf <- sf::st_as_sf(meta_df, coords = c("geoLaenge", "geoBreite"), crs = 4326)
   
-  # Keep only stations inside AOI + buffer
   inside <- sf::st_intersects(stations_sf, aoi_buf, sparse = FALSE)[, 1]
   stations_aoi <- stations_sf[inside, ]
   if (!nrow(stations_aoi)) stop("No stations inside AOI+buffer for this resolution.")
   
-  # Station ids as 5-character strings
-  stations_aoi$Stations_id <- as.character(stations_aoi$Stations_id)
-  stations_aoi$Stations_id <- sprintf("%05d", as.integer(stations_aoi$Stations_id))
+  stations_aoi$Stations_id <- sprintf("%05d", as.integer(as.character(stations_aoi$Stations_id)))
   station_ids <- unique(stations_aoi$Stations_id)
   
-  # --- 2) Collect ZIP URLs (historical + recent) for AOI stations -----------
-  
+  # --- 2) Collect ZIP URLs (historical + recent) ---------------------------
   all_urls <- character(0)
   
-  # historical: structure differs between 10min and 5min
   if (resolution == "10min") {
-    # Simple case: all historical ZIPs in one directory
     hist_url <- paste0(base_http, "historical/")
     fl_hist  <- rvest::read_html(hist_url) |>
       rvest::html_elements("a") |>
       rvest::html_attr("href")
     zip_hist <- grep(zip_pattern, fl_hist, value = TRUE)
-    if (length(zip_hist)) {
-      all_urls <- c(all_urls, paste0(hist_url, zip_hist))
-    }
+    if (length(zip_hist)) all_urls <- c(all_urls, paste0(hist_url, zip_hist))
   } else {
-    # 5min: historical is typically split into subfolders (e.g. by year)
     hist_root <- paste0(base_http, "historical/")
     fl_root   <- rvest::read_html(hist_root) |>
       rvest::html_elements("a") |>
       rvest::html_attr("href")
     
-    # Try to identify year subdirectories like "2023/" "2024/"
     year_dirs <- fl_root[grepl("^[0-9]{4}/$", fl_root)]
     if (length(year_dirs)) {
-      # Limit to years that intersect our time range (with a bit of margin)
       years_all <- as.integer(sub("/$", "", year_dirs))
       year_min  <- as.integer(format(start_date, "%Y")) - 1L
       year_max  <- as.integer(format(end_date,   "%Y")) + 1L
@@ -789,119 +655,82 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
           rvest::html_elements("a") |>
           rvest::html_attr("href")
         zip_y <- grep(zip_pattern, fl_y, value = TRUE)
-        if (length(zip_y)) {
-          all_urls <- c(all_urls, paste0(y_url, zip_y))
-        }
+        if (length(zip_y)) all_urls <- c(all_urls, paste0(y_url, zip_y))
       }
     } else {
-      # Fallback: maybe zips are directly under historical/
       zip_hist <- grep(zip_pattern, fl_root, value = TRUE)
-      if (length(zip_hist)) {
-        all_urls <- c(all_urls, paste0(hist_root, zip_hist))
-      }
+      if (length(zip_hist)) all_urls <- c(all_urls, paste0(hist_root, zip_hist))
     }
   }
   
-  # recent: one zip per station under /recent/
   recent_url <- paste0(base_http, "recent/")
   fl_recent  <- rvest::read_html(recent_url) |>
     rvest::html_elements("a") |>
     rvest::html_attr("href")
   zip_recent <- grep(zip_pattern, fl_recent, value = TRUE)
-  if (length(zip_recent)) {
-    all_urls <- c(all_urls, paste0(recent_url, zip_recent))
-  }
+  if (length(zip_recent)) all_urls <- c(all_urls, paste0(recent_url, zip_recent))
   
   if (!length(all_urls)) stop("No ZIP URLs found for this resolution (historical + recent).")
   
-  # Filter ZIPs to stations that lie inside AOI+buffer
-  # File names look like: 10minutenwerte_nieder_00091_20200101_20241231_hist.zip
-  # or: 5minutenwerte_nieder_00020_20230101_20230131_hist.zip
   zip_station_ids <- sub("^.*_(\\d{5})_.*\\.zip$", "\\1", basename(all_urls))
-  keep            <- zip_station_ids %in% station_ids
-  urls_keep       <- all_urls[keep]
+  keep      <- zip_station_ids %in% station_ids
+  urls_keep <- all_urls[keep]
   
-  if (!length(urls_keep)) {
-    stop("No ZIP files for stations inside AOI+buffer for subhourly precipitation.")
-  }
-  
-  message("ZIPs for stations in AOI: ", length(urls_keep))
+  if (!length(urls_keep)) stop("No ZIP files for stations inside AOI+buffer.")
   
   # --- 3) Download ZIPs if missing -----------------------------------------
   zip_paths <- file.path(raw_dir, basename(urls_keep))
-  
   for (i in seq_along(urls_keep)) {
     if (!file.exists(zip_paths[i])) {
-      message("Download: ", basename(zip_paths[i]))
-      utils::download.file(
-        urls_keep[i],
-        destfile = zip_paths[i],
-        mode     = "wb",
-        quiet    = FALSE
-      )
-    } else {
-      message("Already present: ", basename(zip_paths[i]))
+      utils::download.file(urls_keep[i], destfile = zip_paths[i], mode = "wb", quiet = FALSE)
     }
   }
   
   zip_paths <- zip_paths[file.exists(zip_paths)]
   if (!length(zip_paths)) stop("No ZIP files available locally.")
   
-  # --- 4) Unzip and read produkt_*.txt, filter by time and station ---------
+  # --- 4) Unzip and read produkt_*.txt -------------------------------------
   data_list <- list()
   unzip_dir <- file.path(raw_dir, paste0("unzipped_", resolution, "_precip"))
-  fs::dir_create(unzip_dir)
+  fs::dir_create(unzip_dir, recurse = TRUE)
   
   for (zp in zip_paths) {
+    
     txt_files <- utils::unzip(zp, exdir = unzip_dir)
     txt_files <- txt_files[grepl("^produkt_.*\\.txt$", basename(txt_files))]
     if (!length(txt_files)) next
     
     for (tf in txt_files) {
+      
       df <- tryCatch(
         utils::read.table(
           tf,
-          sep            = ";",
-          header         = TRUE,
+          sep = ";",
+          header = TRUE,
           stringsAsFactors = FALSE,
-          na.strings     = c("-999", "-9999", "-999.0", "-9999.0")
+          na.strings = c("-999", "-9999", "-999.0", "-9999.0")
         ),
         error = function(e) NULL
       )
       if (is.null(df)) next
       if (!"STATIONS_ID" %in% names(df) || !"MESS_DATUM" %in% names(df)) next
+      if (!precip_col %in% names(df)) next
       
-      # Only stations in AOI+buffer
-      df$STATIONS_ID <- as.character(df$STATIONS_ID)
-      df$STATIONS_ID <- sprintf("%05d", as.integer(df$STATIONS_ID))
+      df$STATIONS_ID <- sprintf("%05d", as.integer(as.character(df$STATIONS_ID)))
       df <- df[df$STATIONS_ID %in% station_ids, ]
       if (!nrow(df)) next
       
-      # Convert MESS_DATUM to POSIXct.
-      # 10-min and 5-min datasets often use YYYYMMDDHHMM (12 chars),
-      # but documentation sometimes says YYYYMMDDHH.
       ts_chr <- as.character(df$MESS_DATUM)
       ts_chr <- ts_chr[!is.na(ts_chr)]
       if (!length(ts_chr)) next
       
-      nchar_first <- nchar(ts_chr[1])
-      fmt <- if (nchar_first == 12L) {
-        "%Y%m%d%H%M"
-      } else {
-        "%Y%m%d%H"
-      }
+      fmt <- if (nchar(ts_chr[1]) == 12L) "%Y%m%d%H%M" else "%Y%m%d%H"
       
-      df$datetime <- as.POSIXct(
-        strptime(as.character(df$MESS_DATUM), fmt, tz = "UTC")
-      )
+      df$datetime <- as.POSIXct(strptime(as.character(df$MESS_DATUM), fmt, tz = "UTC"))
       
-      # Filter by time window (inclusive start, exclusive end + 1 day)
       df <- df[df$datetime >= as.POSIXct(start_date) &
                  df$datetime <  as.POSIXct(end_date + 1), ]
       if (!nrow(df)) next
-      
-      # Keep only the main precip column if present
-      if (!precip_col %in% names(df)) next
       
       df <- df[, c("STATIONS_ID", "MESS_DATUM", "datetime", precip_col), drop = FALSE]
       data_list[[length(data_list) + 1]] <- df
@@ -909,25 +738,18 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
   }
   
   if (!length(data_list)) {
-    stop("No data for column ", precip_col,
-         " in the requested period and AOI for resolution=", resolution, ".")
+    stop("No data for column ", precip_col, " in the requested period for resolution=", resolution, ".")
   }
   
   dat <- data.table::rbindlist(data_list, fill = TRUE)
   
-  # --- 5) Merge with station sf (only stations that actually have data) -----
-  stations_aoi$STATIONS_ID <- sprintf("%05d", as.integer(stations_aoi$Stations_id))
+  # --- 5) Merge with station sf --------------------------------------------
+  stations_aoi$STATIONS_ID <- sprintf("%05d", as.integer(as.character(stations_aoi$Stations_id)))
+  stations_used <- stations_aoi[stations_aoi$STATIONS_ID %in% unique(dat$STATIONS_ID), ]
   
-  station_ids_data <- unique(dat$STATIONS_ID)
-  stations_used    <- stations_aoi[stations_aoi$STATIONS_ID %in% station_ids_data, ]
+  merged_sf <- merge(stations_used, dat, by = "STATIONS_ID")
   
-  merged_sf <- merge(
-    stations_used,
-    dat,
-    by = "STATIONS_ID"
-  )
-  
-  # --- 6) Write CSV + RDS if requested -------------------------------------
+  # --- 6) Optional writes ---------------------------------------------------
   stub <- paste0(
     "burgwald_", resolution, "_precip_",
     format(start_date, "%Y%m%d"), "_",
@@ -937,17 +759,17 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
   if (write_csv) {
     csv_file <- file.path(raw_dir, paste0(stub, ".csv"))
     data.table::fwrite(sf::st_drop_geometry(merged_sf), csv_file, dec = ".")
-    message("CSV: ", csv_file)
   }
   
   if (write_rds) {
-    rds_file <- file.path(proc_dir, paste0(stub, ".rds"))
+    rds_file <- paths[[out_key]]
+    fs::dir_create(dirname(rds_file), recurse = TRUE)
     saveRDS(merged_sf, rds_file)
-    message("RDS: ", rds_file)
   }
   
   merged_sf
 }
+
 
 
 #' Burgwald: RADOLAN RW (recent hourly radar) for AOI + buffer
@@ -981,8 +803,8 @@ burgwald_get_subhourly_precip <- function(resolution = c("10min", "5min"),
 #'   cropped to AOI + buffer, and a time vector in `terra::time(x)`.
 burgwald_get_radolan_rw_recent <- function(start_datetime,
                                            end_datetime,
-                                           aoi_wgs      = aoi_burgwald_wgs,
-                                           buffer_km    = 50,
+                                           aoi_wgs       = aoi_burgwald_wgs,
+                                           buffer_km     = 50,
                                            write_rasters = TRUE,
                                            write_rds     = TRUE) {
   
@@ -1024,15 +846,10 @@ burgwald_get_radolan_rw_recent <- function(start_datetime,
   bbox <- sf::st_bbox(aoi_buf)
   message("AOI+buffer bbox (WGS84): ", paste(round(bbox, 3), collapse = ", "))
   
-  # ---- Paths (here::here, consistent with your setup) ----------------------
-  raw_dir   <- here::here("data", "raw",       "radolan-rw")
-  proc_dir  <- here::here("data", "processed", "radolan-rw")
-  fs::dir_create(raw_dir)
-  fs::dir_create(proc_dir)
+  # ---- RAW provider cache path --------------------------------------------
+  raw_dir <- here::here("data", "raw", "providers", "dwd", "radolan")
   
   # ---- 1) List available recent RW files via rdwd -------------------------
-  # Uses rdwd::gridbase and the example path "hourly/radolan/recent/bin"
-  # from the rdwd docs.
   if (!requireNamespace("rdwd", quietly = TRUE)) {
     stop("Package 'rdwd' is required for RADOLAN handling.")
   }
@@ -1043,16 +860,13 @@ burgwald_get_radolan_rw_recent <- function(start_datetime,
   rw_links <- rdwd::indexFTP(
     "hourly/radolan/recent/bin",
     base = gridbase,
-    dir  = tempdir()
+    dir  = raw_dir
   )
   
   if (!length(rw_links)) {
     stop("No RADOLAN RW links found under hourly/radolan/recent/bin.")
   }
   
-  # rw_links are complete URLs (or relative paths) like:
-  # ".../hourly/radolan/recent/bin/raa01-rw_10000-YYMMDDHHMM-dwd---bin.gz"
-  # We parse the YYMMDDHHMM timestamp from the filename.
   fn   <- basename(rw_links)
   ts_s <- sub("^.*-(\\d{10})-.*$", "\\1", fn)   # extract 10-digit time code
   ok   <- grepl("^[0-9]{10}$", ts_s)
@@ -1080,7 +894,6 @@ burgwald_get_radolan_rw_recent <- function(start_datetime,
   message("Number of RADOLAN RW files selected: ", length(rw_links))
   
   # ---- 2) Download files (if not present) ---------------------------------
-  # We store the .gz files under raw_dir
   gz_paths <- file.path(raw_dir, basename(rw_links))
   
   for (i in seq_along(rw_links)) {
@@ -1103,7 +916,7 @@ burgwald_get_radolan_rw_recent <- function(start_datetime,
     stop("No local RADOLAN RW files found after download step.")
   }
   
-  # ---- 3) Read and project each file, crop to AOI+buffer ------------------
+  # ---- 3) Read, project, crop/mask to AOI buffer --------------------------
   if (!requireNamespace("terra", quietly = TRUE)) {
     stop("Package 'terra' is required for raster handling.")
   }
@@ -1113,32 +926,22 @@ burgwald_get_radolan_rw_recent <- function(start_datetime,
   for (i in seq_along(gz_paths)) {
     message("Reading RADOLAN RW file: ", basename(gz_paths[i]))
     
-    # rdwd::readDWD() will dispatch to readDWD.radar for these radar files.
     rad <- rdwd::readDWD(gz_paths[i])
+    r   <- rad$dat
     
-    # rad$dat is usually a SpatRaster (toraster=TRUE by default)
-    r <- rad$dat
-    
-    # Project to lat/lon using rdwd helper (proj="radolan" is ok for RW)
-    # extent="radolan" or "rw" depending on desired cropping extent;
-    # "radolan" gives the full radar grid.
     r_ll <- rdwd::projectRasterDWD(
       r,
-      proj   = "radolan",
-      extent = "radolan",
+      proj     = "radolan",
+      extent   = "radolan",
       adjust05 = FALSE
     )
     
-    # Crop to AOI buffer
-    # Convert AOI buffer to terra::vect for cropping
     aoi_vect <- terra::vect(aoi_buf)
     r_crop   <- terra::crop(r_ll, aoi_vect)
     r_mask   <- terra::mask(r_crop, aoi_vect)
     
-    # Preserve timestamp
     terra::time(r_mask) <- ts_posix[i]
     
-    # Optional: write each cropped raster as GeoTIFF
     if (write_rasters) {
       tstamp  <- format(ts_posix[i], "%Y%m%d%H%M")
       tifname <- file.path(raw_dir, paste0("radolan_rw_burgwald_", tstamp, ".tif"))
@@ -1155,29 +958,19 @@ burgwald_get_radolan_rw_recent <- function(start_datetime,
   }
   
   # ---- 4) Stack all rasters into one SpatRaster ---------------------------
-  # terra::rast() can combine a list of compatible rasters
   r_stack <- terra::rast(rasters_list)
-  
-  # Ensure time dimension is attached
   terra::time(r_stack) <- ts_posix
   
-  # ---- 5) Optional: save stack as RDS -------------------------------------
+  # ---- 5) Optional: save stack as canonical RDS (S1) -----------------------
   if (write_rds) {
-    out_rds <- file.path(
-      proc_dir,
-      paste0(
-        "burgwald_radolan_rw_recent_",
-        format(start_datetime, "%Y%m%d%H%M"), "_",
-        format(end_datetime,   "%Y%m%d%H%M"),
-        ".rds"
-      )
-    )
+    out_rds <- paths[["radolan_rw_recent"]]
     saveRDS(r_stack, out_rds)
     message("RADOLAN RW stack RDS: ", out_rds)
   }
   
   r_stack
 }
+
 
 
 

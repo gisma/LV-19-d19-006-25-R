@@ -1,57 +1,25 @@
 #!/usr/bin/env Rscript
 
 ############################################################
-# Script:  01-1_get_base-geodata.R
-# Author:   [Your Name]
-# Project:  [Your Project Name]
+# Script: 01-1_get_base-geodata.R
 #
-# Purpose:
-# --------
-#   This script prepares all *base geodata* for the Burgwald AOI:
-#
-#   1) Topography:
-#        - Download and mosaic DGM1 (1 m) for the surrounding counties
-#        - Clip the DEM to the Burgwald AOI
-#
-#   2) Land cover:
-#        - Extract and crop CLC5 2018 (Copernicus 100 m raster)
-#        - Store a clipped land-cover raster for the AOI
-#
-#   3) Vector context data (OpenStreetMap):
-#        - Download OSM feature groups (highway, landuse, natural, waterway,
-#          building, railway) intersecting the AOI
-#        - Save one file per OSM key under data/raw/AOI_Burgwald/osm_by_key/
-#
-# Output:
-#   All base layers are stored under:
-#     data/raw/AOI_Burgwald/
-#
-# Notes:
-#   - Satellite data (Sentinel / CDSE / gdalcubes) are fetched and processed
-#     in *separate* scripts; this file only prepares DEM, land cover,
-#     OSM context layers.
-#
-# Requirements:
-#   - 00-setup-burgwald.R must be executed first
-#       → loads packages
-#       → defines aoi_burgwald_wgs, aoi_root, run_if_missing(), download_if_missing()
+# Products (via paths):
+#   - aoi_dgm
+#   - aoi_clc
+#   - osm_by_key
 ############################################################
 
-
-# sourcing of the setup and specific used funtions
-source("src/_core/00-setup-burgwald.R")
+source("src/_core/01-setup-burgwald.R")
 
 
 ############################################################
-# 1) DGM1 processing (1 m) → mosaic + clip
-#    Output: data/raw/AOI_Burgwald/dem/dem_dgm1_burgwald.tif
+# 1) DGM1 DEM → mosaic and clip to AOI
 ############################################################
 
-dem_out_file <- file.path(aoi_root, "dem", "dem_dgm1_burgwald.tif")
+dem_out_file <- paths[["aoi_dgm"]]
 
 run_if_missing(dem_out_file, {
   
-  # HVBG provides date-specific links, so URLs are built dynamically.
   today <- format(Sys.Date(), "%Y%m%d")
   
   base_url_wf <- paste0(
@@ -64,7 +32,6 @@ run_if_missing(dem_out_file, {
     "/3D-Daten/Digitales%20Gelände­modell%20(DGM1)/Landkreis%20Marburg-Biedenkopf/"
   )
   
-  # DGM1 ZIPs covering the Burgwald region (Hesse).
   dgm1_urls <- c(
     burgwald     = paste0(base_url_wf, "Burgwald%20-%20DGM1.zip"),
     gemuenden    = paste0(base_url_wf, "Gem%C3%BCnden%20(Wohra)%20-%20DGM1.zip"),
@@ -80,9 +47,6 @@ run_if_missing(dem_out_file, {
   
   all_tif_files <- character(0)
   
-  # ----------------------------------------------
-  # Download all DGM1 ZIP files + extract all TIFs
-  # ----------------------------------------------
   for (nm in names(dgm1_urls)) {
     
     url_i      <- dgm1_urls[[nm]]
@@ -106,16 +70,14 @@ run_if_missing(dem_out_file, {
     all_tif_files <- c(all_tif_files, tif_i)
   }
   
-  # Create a mosaic of all DGM tiles
   dem_list <- lapply(all_tif_files, function(f) {
     r <- terra::rast(f)
-    terra::crs(r) <- "EPSG:25832"  # ETRS89 / UTM 32N
+    terra::crs(r) <- "EPSG:25832"
     r
   })
   
   dem_merged <- do.call(terra::mosaic, c(dem_list, fun = "min"))
   
-  # Clip mosaic to AOI
   aoi_dem_sf <- sf::st_transform(aoi_burgwald_wgs, terra::crs(dem_merged))
   aoi_dem_v  <- terra::vect(aoi_dem_sf)
   
@@ -124,42 +86,34 @@ run_if_missing(dem_out_file, {
     terra::mask(aoi_dem_v)
   
   terra::writeRaster(dem_burgwald, dem_out_file, overwrite = TRUE)
-  message("✓ DGM1 saved to: ", dem_out_file)
 })
 
 
 ############################################################
-# 2) CLC5 2018 – extract Copernicus raster → clip to AOI
-#    Output: data/raw/AOI_Burgwald/clc/clc5_2018_burgwald.tif
+# 2) CLC5 2018 → clip to AOI
 ############################################################
 
-clc_out_file <- file.path(aoi_root, "clc", "clc5_2018_burgwald.tif")
+clc_out_file <- paths[["aoi_clc"]]
 
 run_if_missing(clc_out_file, {
   
-  # Main CLC ZIP containing subdirectories and an inner ZIP
   clc_zip  <- here::here("data", "raw", "31916.zip")
   clc_root <- here::here("data", "raw", "clc5_2018_copernicus")
   unzip(clc_zip, exdir = clc_root)
   
-  # Find "Results/" inside Copernicus archive
   results_dir <- dir(clc_root, pattern = "Results", full.names = TRUE)[1]
   zipname     <- dir(results_dir, pattern = "\\.zip$", full.names = TRUE)[1]
   
-  # Extract raster100m package into data/raw/
   unzip(zipname, exdir = here::here("data", "raw"))
   
-  # Path inside the Copernicus structure
   data_dir <- here::here(
     "data", "raw",
     "u2018_clc2018_v2020_20u1_raster100m", "DATA"
   )
   
   clc_tif <- dir(data_dir, pattern = "\\.tif$", full.names = TRUE)[1]
-  
   clc_rast <- terra::rast(clc_tif)
   
-  # Clip to AOI
   aoi_clc   <- sf::st_transform(aoi_burgwald_wgs, terra::crs(clc_rast))
   aoi_clc_v <- terra::vect(aoi_clc)
   
@@ -168,27 +122,25 @@ run_if_missing(clc_out_file, {
     terra::mask(aoi_clc_v)
   
   terra::writeRaster(clc_crop, clc_out_file, overwrite = TRUE)
-  message("✓ CLC5 raster saved to: ", clc_out_file)
 })
 
 
 ############################################################
-# 3) OSM download by key (roads, landuse, natural, …)
-#    Output: one file per OSM key under:
-#            data/raw/AOI_Burgwald/osm_by_key/
+# 3) OpenStreetMap layers by key
 ############################################################
 
-osm_dir <- file.path(aoi_root, "osm_by_key")
+osm_dir <- paths[["osm_by_key"]]
 
-osm_by_key <- get_osm_burgwald_by_key(
-  aoi_wgs84 = aoi_burgwald_wgs,
-  out_dir   = osm_dir,
-  keys      = c("highway", "landuse", "natural", "waterway",
-                "building", "railway"),
-  write     = TRUE
-)
-
-# Example visualization
-mapview::mapview(osm_by_key$highway$lines)
-mapview::mapview(osm_by_key$landuse$polygons)
-
+run_if_missing(osm_dir, {
+  Sys.setenv(OSM_TIMEOUT = 300)
+  osm_by_key <- get_osm_burgwald_by_key(
+    aoi_wgs84 = aoi_burgwald_wgs,
+    out_dir   = osm_dir,
+    keys      = c("highway", "landuse", "natural", "waterway",
+                  "building", "railway"),
+    write     = TRUE
+  )
+  
+  mapview::mapview(osm_by_key$highway$lines)
+  mapview::mapview(osm_by_key$landuse$polygons)
+})

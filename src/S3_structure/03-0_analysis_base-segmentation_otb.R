@@ -1,163 +1,291 @@
 #!/usr/bin/env Rscript
 
-# sourcing of the setup and specific used functions
-source("src/_core/00-setup-burgwald.R")
+############################################################
+# Script:  03-0_analysis_base-segmentation_otb.R
+# Project: Burgwald
+#
+# Purpose:
+# --------
+# Base segmentation of Sentinel predictor stack using OTB (link2GI):
+#   - Z-score standardisation (BandMathX)
+#   - PCA feature extraction (DimensionalityReduction)
+#   - Multi-scale MeanShift segmentation + ARI_prev stability metric
+#   - Export final segmentation:
+#        (1) run MeanShift in raster-label mode
+#        (2) compute label-size distribution
+#        (3) choose min-pixel threshold from distribution
+#        (4) sieve (<min_px) and reassign to dominant neighbors
+#        (5) polygonize the cleaned label raster and write GPKG
+#
+# Rules implemented:
+# ------------------
+# - Productive outputs come ONLY from outputs.tsv via `paths[...]`.
+# - tmp stays non-productive (not in outputs.tsv).
+# - OTB is linked via a fixed local searchLocation (no system-wide search).
+############################################################
 
-# ---- helpers FIRST (create this file exactly as above) -----------------------
-source("src","r-libs/metrics-fun.R")
+## -------------------------------------------------------------------
+## 0) Setup + libraries
+## -------------------------------------------------------------------
 
-# ---------------------------------------------------------
-# 0) Inputs / outputs
-# ---------------------------------------------------------
-year <- 2018
-pred_stack_file <- here::here("data", paste0("pred_stack_", year, ".tif"))
+library(here)
+library(link2GI)
+
+library(terra)
+library(sf)
+library(dplyr)
+library(tibble)
+library(readr)
+
+source(here::here("src", "_core", "01-setup-burgwald.R"))
+source(here::here("src", "r-libs", "metrics-fun.R"))
+
+## -------------------------------------------------------------------
+## 1) Input definition (productive input via outputs.tsv)
+## -------------------------------------------------------------------
+
+pred_stack_file <- paths[["s2_pred_stack_2021"]]
 stopifnot(file.exists(pred_stack_file))
 
-out_root <- here::here("data", "processed", "layer0_segments")
-feat_dir <- file.path(out_root, "features")
-seg_dir  <- file.path(out_root, "segments")
-met_dir  <- file.path(out_root, "metrics")         # NEW
-tmp_dir  <- file.path(out_root, "tmp_meanshift")   # NEW (raster outputs for ARI)
-fs::dir_create(c(out_root, feat_dir, seg_dir, met_dir, tmp_dir))
+## -------------------------------------------------------------------
+## 2) Productive outputs (from outputs.tsv via `paths`)
+## -------------------------------------------------------------------
 
-# ---------------------------------------------------------
-# 1) OTB environment + runner
-# ---------------------------------------------------------
-otblink <- link2GI::linkOTB(searchLocation = "~/apps/otb911")
+zscore_file  <- paths[["layer0_zscore_stack"]]
+pca_file     <- paths[["layer0_pca_features"]]
+metrics_file <- paths[["layer0_meanshift_metrics"]]
+seg_file     <- paths[["layer0_segments"]]
 
-# ---------------------------------------------------------
-# 2) Standardize (z-score) with BandMathX
-# ---------------------------------------------------------
-r  <- terra::rast(pred_stack_file)
-nb <- terra::nlyr(r)
-rm(r); gc()
+## -------------------------------------------------------------------
+## 2b) tmp output folder (explicitly NOT productive / not in outputs.tsv)
+## -------------------------------------------------------------------
 
-expr <- paste(
-  vapply(seq_len(nb), function(i) {
-    sprintf("(im1b%d - im1b%dMean) / sqrt(im1b%dVar)", i, i, i)
-  }, character(1)),
-  collapse = ";"
+tmp_root <- here::here("data", "processed", "layer0_segments", "tmp_meanshift")
+dir.create(tmp_root, recursive = TRUE, showWarnings = FALSE)
+
+## -------------------------------------------------------------------
+## 3) Link OTB
+## -------------------------------------------------------------------
+
+otb <- link2GI::linkOTB(searchLocation = "~/apps/otb911")
+
+## -------------------------------------------------------------------
+## 4) Z-score standardisation (BandMathX) — Self-describing API
+## -------------------------------------------------------------------
+#
+# GOAL
+# ----
+# Convert a multi-band predictor raster into a standardized feature stack
+# where each band is transformed to:
+#
+#   z = (x - mean(x)) / sqrt(var(x))
+#
+# This removes scale differences between bands and makes them comparable
+# for downstream PCA and segmentation.
+#
+# IMPORTANT TECHNICAL NOTE
+# ------------------------
+# BandMathX expressions contain semicolons and parentheses; therefore the
+# expression must be shell-quoted. This is handled inside
+# run_otb_bandmathx_zscore() via build_bandmathx_zscore_expr().
+#
+
+run_otb_bandmathx_zscore(
+  otb      = otb,
+  in_file  = pred_stack_file,
+  out_file = zscore_file,
+  ram      = 256,
+  quiet    = FALSE
 )
-expr <- paste0("'", expr, "'")
+stopifnot(file.exists(zscore_file))
 
-algo <- "BandMathX"
-std_file <- file.path(out_root, paste0(algo, "_zscore_stack.tif"))
-cmd <- parseOTBFunction(algo = algo, gili = otblink)
-cmd$il  <- pred_stack_file
-cmd$out <- std_file
-cmd$exp <- expr
-cmd[["progress"]] <- 1
-runOTB(cmd, gili = otblink, quiet = FALSE, retRaster = FALSE)
-stopifnot(file.exists(std_file))
-message("Standardized stack written: ", std_file)
+## -------------------------------------------------------------------
+## 5) PCA feature extraction (DimensionalityReduction) — Self-describing API
+## -------------------------------------------------------------------
 
-# ---------------------------------------------------------
-# 3) PCA (OTB) on standardized stack
-# ---------------------------------------------------------
-ncomp <- 6
-pca_file <- file.path(feat_dir, paste0("features_otb_pca_y", year, "_pc", ncomp, ".tif"))
-
-algo <- "DimensionalityReduction"
-cmd <- parseOTBFunction(algo = algo, gili = otblink)
-cmd[["in"]]     <- std_file
-cmd[["method"]] <- "pca"
-cmd[["nbcomp"]] <- as.character(ncomp)
-cmd$out <- pca_file
-runOTB(cmd, gili = otblink, quiet = FALSE, retRaster = FALSE)
+run_otb_pca(
+  otb      = otb,
+  in_file  = zscore_file,
+  out_file = pca_file,
+  ncomp    = 6L,
+  ram      = 256,
+  quiet    = FALSE
+)
 stopifnot(file.exists(pca_file))
 
-# ---------------------------------------------------------
-# 4) LargeScaleMeanShift multiscale: METRICS FIRST (ARI_prev)
-# ---------------------------------------------------------
-param_grid <- data.frame(
-  scale_id  = c("s30m", "s60m", "s120m"),
-  spatialr  = c(3, 6, 12),
-  ranger    = c(0.10, 0.12, 0.15),
-  minsize   = c(80, 120, 200),
-  stringsAsFactors = FALSE
+## -------------------------------------------------------------------
+## 6) Multi-scale MeanShift + ARI_prev evaluation
+## -------------------------------------------------------------------
+# NOTE ON SCALE SELECTION
+# -----------------------
+# The parameters (spatialr, ranger, minsize) define operational segmentation scales,
+# not physical process scales. They control neighborhood size, feature similarity
+# tolerance, and internal region merging within the MeanShift algorithm.
+#
+# There is an inherent circularity between:
+#   (1) landscape scale (what we assume to be meaningful spatial units),
+#   (2) process scale (at which physical/ecological processes operate), and
+#   (3) spectrally derivable scale (what can be extracted from RS features + PCA).
+#
+# Segmentation scale influences the observed structure, which is later used to
+# justify the segmentation scale itself. Therefore parameters are treated as
+# exploratory control parameters and evaluated via stability (ARI_prev),
+# not interpreted as physically meaningful scales.
+#
+# Final minimum segment size is enforced separately via raster sieve post-processing.
+
+scales <- tibble::tibble(
+  scale_id = c("s20m", "s30m", "s40m", "s60m", "s80m", "s120m"),
+  spatialr = c(2,     3,     4,     6,     8,     12),
+  ranger   = c(0.06,  0.08,  0.10,  0.12,  0.14,  0.16),
+  minsize  = c(30,    40,    50,    80,    100,   150)
 )
 
-# --- tuning knobs for ARI_prev (explicit) ------------------------------------
-ari_cfg <- list(
-  dr = 0.01,  # ranger perturbation
-  ds = 1L,    # spatialr perturbation
-  dm = 20L,   # minsize perturbation
-  K  = 8L     # number of perturbed runs
+
+metrics_list <- vector("list", nrow(scales))
+
+for (i in seq_len(nrow(scales))) {
+  
+  s <- scales[i, ]
+  message("Processing scale: ", s$scale_id)
+  
+  metrics_list[[i]] <- compute_ari_prev(
+    otblink     = otb,
+    feat_raster = pca_file,
+    out_dir_tmp = tmp_root,
+    spatialr    = s$spatialr,
+    ranger      = s$ranger,
+    minsize     = s$minsize,
+    perturb     = list(dr = 0.02, ds = 1L, dm = 20L, K = 8L),
+    sample_n    = 2e5,
+    seed        = 1L,
+    tilesize    = 256L,
+    ram         = 256,
+    quiet       = TRUE
+  ) %>%
+    dplyr::mutate(scale_id = s$scale_id)
+}
+
+metrics_df <- bind_rows(metrics_list)
+
+# Normalize naming to the column used downstream (avoid silent mismatch)
+# compute_ari_prev() returns 'ari_prev' (lowercase); downstream expects 'ARI_prev'
+if ("ari_prev" %in% names(metrics_df) && !"ARI_prev" %in% names(metrics_df)) {
+  metrics_df <- dplyr::rename(metrics_df, ARI_prev = ari_prev)
+}
+
+# write metrics CSV to productive path (outputs.tsv)
+readr::write_csv(metrics_df, metrics_file)
+
+## -------------------------------------------------------------------
+## 7) Select best scale
+## -------------------------------------------------------------------
+
+best_id <- metrics_df %>%
+  arrange(desc(ARI_prev)) %>%
+  slice(1) %>%
+  pull(scale_id)
+
+message("Best scale selected: ", best_id)
+
+best_params <- scales %>%
+  filter(scale_id == best_id)
+
+best_spatialr <- best_params$spatialr[[1]]
+best_ranger   <- best_params$ranger[[1]]
+best_minsize  <- best_params$minsize[[1]]
+
+## -------------------------------------------------------------------
+## 8) Final segmentation: raster labels -> stats -> sieve -> polygonize
+## -------------------------------------------------------------------
+#
+# Rationale
+# ---------
+# OTB's 'minsize' influences the internal merging step but does NOT guarantee
+# that the final segmentation contains no tiny regions. We therefore enforce
+# a hard postcondition:
+#
+#   - compute the label size distribution
+#   - choose a min pixel threshold from that distribution
+#   - absorb labels smaller than min_px into the dominant neighbor label
+#   - polygonize the cleaned label raster and write the productive GPKG
+#
+
+# (8.1) Produce label raster in tmp (non-productive)
+label_file <- file.path(tmp_root, sprintf("layer0_labels_%s.tif", best_id))
+
+run_otb_meanshift_labels(
+  otb              = otb,
+  in_raster        = pca_file,
+  out_label_raster = label_file,
+  spatialr         = best_spatialr,
+  ranger           = best_ranger,
+  minsize          = best_minsize,
+  tilesize         = 256L,
+  ram              = 256,
+  quiet            = TRUE
 )
-sample_n <- 2e6   # pixels sampled for ARI (reduce if RAM tight)
-tilesiz  <- 500L
-ram_mb   <- NULL  # set e.g. 8192 if you want explicit
-seed0    <- 42L
+stopifnot(file.exists(label_file))
 
-metrics <- vector("list", nrow(param_grid))
+# (8.2) Compute label size distribution and choose min_px from distribution
+st <- label_size_stats(label_file)
 
-for (i in seq_len(nrow(param_grid))) {
-  p <- param_grid[i, ]
-  message(sprintf("ARI_prev: %s (spatialr=%d, ranger=%.3f, minsize=%d)",
-                  p$scale_id, p$spatialr, p$ranger, p$minsize))
+message("Label-size quantiles (pixels per label):")
+print(st$quantile)
+message("Shares of small labels (by count):")
+print(st$shares)
+
+# Explicit, audit-friendly decision rule (see metrics-fun.R)
+min_px <- choose_min_px(
+  st,
+  onepx_threshold     = 0.05,  # trigger cleanup if >=5% of labels are ~1 pixel
+  min_px_if_triggered = 5L,
+  min_px_else         = 0L
+)
+message("Chosen min_px for sieve/reassign: ", min_px)
+
+# (8.3) Sieve / reassign if requested
+label_file_clean <- label_file
+
+if (min_px > 0) {
+  lab_clean <- sieve_labels(label_file, min_px = min_px, max_iter = 50L)
   
-  out_tmp <- file.path(tmp_dir, paste0("ari_", p$scale_id, "_y", year))
-  res <- compute_ari_prev(
-    otblink    = otblink,
-    feat_raster= pca_file,
-    out_dir_tmp= out_tmp,
-    spatialr   = p$spatialr,
-    ranger     = p$ranger,
-    minsize    = p$minsize,
-    perturb    = ari_cfg,
-    sample_n   = sample_n,
-    seed       = seed0 + i * 100L,
-    tilesize   = tilesiz,
-    ram        = ram_mb,
-    quiet      = TRUE
-  )
+  label_file_clean <- file.path(tmp_root, sprintf("layer0_labels_%s_sieved_minpx%d.tif", best_id, min_px))
+  terra::writeRaster(lab_clean, label_file_clean, overwrite = TRUE)
   
-  metrics[[i]] <- data.frame(
-    scale_id = p$scale_id,
-    spatialr = p$spatialr,
-    ranger   = p$ranger,
-    minsize  = p$minsize,
-    ARI_prev = res$ari_prev,
-    ARI_sd   = res$ari_sd
-  )
+  stopifnot(file.exists(label_file_clean))
+  message("Sieved label raster written to (tmp): ", label_file_clean)
+} else {
+  message("No sieve applied (min_px == 0).")
 }
 
-metrics_df <- do.call(rbind, metrics)
-metrics_file <- file.path(met_dir, paste0("meanshift_ari_prev_y", year, ".csv"))
-write.csv(metrics_df, metrics_file, row.names = FALSE)
-message("ARI_prev metrics written: ", metrics_file)
-print(metrics_df)
+# (8.4) Polygonize cleaned label raster and write productive GPKG
+#
+# We polygonize AFTER sieve so that the productive segmentation output
+# reflects the hard postcondition (no tiny regions).
+#
+# dissolve=TRUE ensures one polygon per label.
+lab_r <- terra::rast(label_file_clean)
+pol   <- terra::as.polygons(lab_r, dissolve = TRUE, values = TRUE, na.rm = TRUE)
 
-# ---------------------------------------------------------
-# 5) (optional) Final segmentation export (vector) ONLY for chosen scales
-# ---------------------------------------------------------
-# Example rule: take the best ARI_prev (you can replace by your own logic)
-best_id <- metrics_df$scale_id[which.max(metrics_df$ARI_prev)]
-message("Best (by ARI_prev): ", best_id)
+# The polygon attribute holding the label value will have the raster layer name.
+# Make it explicit and stable.
+lab_name <- names(pol)[1]
+names(pol)[names(pol) == lab_name] <- "segment_id"
 
-for (i in seq_len(nrow(param_grid))) {
-  p <- param_grid[i, ]
-  if (p$scale_id != best_id) next
-  
-  out_vec <- file.path(seg_dir, paste0("segments_meanshift_", p$scale_id, "_y", year, ".gpkg"))
-  
-  algo <- "LargeScaleMeanShift"
-  cmd <- parseOTBFunction(algo = algo, gili = otblink)
-  
-  cmd[["in"]] <- pca_file
-  cmd[["spatialr"]] <- as.character(p$spatialr)
-  cmd[["ranger"]]   <- as.character(p$ranger)
-  cmd[["minsize"]]  <- as.character(p$minsize)
-  
-  cmd[["mode"]]            <- "vector"
-  cmd[["mode.vector.out"]] <- out_vec
-  
-  cmd[["tilesizex"]] <- "500"
-  cmd[["tilesizey"]] <- "500"
-  
-  runOTB(cmd, gili = otblink, quiet = FALSE, retRaster = FALSE)
-  stopifnot(file.exists(out_vec))
-  message("Final vector segmentation written: ", out_vec)
+# Convert to sf and ensure segment_id is integer
+seg_sf <- sf::st_as_sf(pol)
+seg_sf$segment_id <- as.integer(seg_sf$segment_id)
+
+# Write as GPKG to productive path (from outputs.tsv)
+# Overwrite if exists.
+if (file.exists(seg_file)) {
+  try(sf::st_delete_dsn(seg_file), silent = TRUE)
 }
 
-message("Layer 0 done.")
+sf::st_write(seg_sf, seg_file, delete_dsn = TRUE, quiet = TRUE)
+
+message("Final segmentation written to (productive):")
+message(seg_file)
+stopifnot(file.exists(seg_file))
+

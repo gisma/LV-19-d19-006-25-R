@@ -3,193 +3,146 @@
 ############################################################
 # Script:   02-3_processing_basic-classifications_cdse.R
 # Author:   [Your Name]
-# Project:  [Your Project Name]
+# Project:  Burgwald
 #
 # Purpose:
 # --------
-# - Perform classification for ONE CDSE-based predictor stack
-#   (one time slice, e.g. 2018-06-29) using:
-#     * k-means (unsupervised, exploratory)
-#     * Maximum Likelihood Classification (MLC, via RStoolbox::superClass)
-#     * Random Forest (via caret + randomForest)
-#   and compute a confusion matrix for RF.
+# Perform classification for ONE CDSE-based predictor stack (single time slice)
+# using:
+#   * k-means (unsupervised, exploratory)
+#   * Maximum Likelihood Classification (MLC) via RStoolbox::superClass(model="mlc")
+#   * Random Forest via caret (method="rf")
+# and save RF confusion matrix.
 #
-# Assumptions:
-# - 01_setup-burgwald.R has already been run in this project.
-# - here::here() points to the project root.
-# - A CDSE-based predictor stack exists, written by your CDSE script:
-#       here("data", "pred_stack_2018.tif")
-#   (adjust pred_stack_file below if you use a different name).
-# - A training polygon layer exists with a "class" column, e.g.:
-#       here("data", "processed", "train_areas_burgwald.gpkg")
+# Contract rule (project core):
+# ----------------------------
+# ALL filenames/paths come from metadata/outputs.tsv via `paths` created in
+# src/_core/01-setup-burgwald.R.
 #
-# NO gdalcubes, NO time-series cube here – only single-date classification.
+# Reads (S1):
+#   - cdse_pred_stack (tif)
+#   - training_polygons (gpkg)
+# Writes (S2):
+#   - classification_kmeans (tif)
+#   - classification_mlc (tif)
+#   - classification_rf (tif)
+#   - classification_rf_model (rds)
+#   - classification_rf_confusion (rds)
 ############################################################
 
 # -----------------------------
-# 0) Packages
+# 0) Setup + packages
 # -----------------------------
-source(here::here("src","_core", "00-setup-burgwald.R"))
-
+source(here::here("src", "_core", "01-setup-burgwald.R"))
 
 # -----------------------------
-# 1) Input paths (adjust only if needed)
+# 1) Contracts (outputs.tsv -> paths)
 # -----------------------------
+pred_stack_file <- paths[["cdse_pred_stack"]]
+train_poly_file <- paths[["training_polygons"]]
 
-# CDSE-derived predictor stack for a single time slice (e.g. best-summer day 2018)
-pred_stack_file <- here::here("data", "pred_stack_2018.tif")
+out_kmeans   <- paths[["classification_kmeans"]]
+out_mlc      <- paths[["classification_mlc"]]
+out_rf       <- paths[["classification_rf"]]
+out_rf_model <- paths[["classification_rf_model"]]
+out_rf_conf  <- paths[["classification_rf_confusion"]]
 
-# Training polygons with a "class" field (e.g. clearcut / other)
-# If your training file has a different name, change ONLY this path.
-train_poly_file <- here::here("data", "processed", "train_areas_burgwald.gpkg")
-
-# Name of the class attribute in the training polygons
 class_field <- "class"
 
 # -----------------------------
-# 2) Load raster stack + training polygons
+# 2) Load predictor stack + training polygons
 # -----------------------------
-if (!file.exists(pred_stack_file)) {
-  stop("Predictor stack not found: ", pred_stack_file,
-       "\nMake sure your CDSE script has written pred_stack_2018.tif into data/.")
-}
+# RStoolbox expects Raster*; exactextractr works fine with terra SpatRaster.
+pred_stack_t <- terra::rast(pred_stack_file)
+pred_stack_r <- raster::stack(pred_stack_file)
 
-if (!file.exists(train_poly_file)) {
-  stop("Training polygons not found: ", train_poly_file,
-       "\nAdapt train_poly_file or export your training data to this path.")
-}
-
-pred_stack   <- terra::rast(pred_stack_file)
-train_areas  <- sf::st_read(train_poly_file, quiet = TRUE)
-
-message("Loaded predictor stack with ", nlyr(pred_stack), " layers.")
-message("Loaded training polygons: ", nrow(train_areas), " features.")
-
-# Quick sanity check that class field exists
-if (!(class_field %in% names(train_areas))) {
-  stop("Field '", class_field, "' not found in training polygons. Available fields: ",
-       paste(names(train_areas), collapse = ", "))
-}
+train_areas <- sf::st_read(train_poly_file, quiet = TRUE)
 
 # -----------------------------
-# 3) Unsupervised k-means (exploratory)
+# 3) Unsupervised k-means (RStoolbox)
 # -----------------------------
-
-# By default, use ALL layers in pred_stack for clustering.
-# If you want to restrict, you can specify explicit layer names, e.g.:
-# cluster_layers <- pred_stack[[c("B04", "B08", "EVI", "kNDVI", "SAVI")]]
-cluster_layers <- pred_stack
-
-set.seed(123)  # reproducibility
+set.seed(123)
 
 kmeans_result <- RStoolbox::unsuperClass(
-  img       = cluster_layers,
+  img       = pred_stack_r,
   nClasses  = 5,
   norm      = TRUE,
   algorithm = "MacQueen"
 )
 
-kmeans_map <- kmeans_result$map
-
-# Optional: write to disk for inspection
-terra::writeRaster(
-  kmeans_map,
-  here::here("data", "classification_kmeans_2018.tif"),
+raster::writeRaster(
+  kmeans_result$map,
+  filename  = out_kmeans,
   overwrite = TRUE
 )
 
-message("Unsupervised k-means classification written to data/classification_kmeans_2018.tif")
-
 # -----------------------------
-# 4) Extract training data from CDSE stack
+# 4) Training data extraction (exactextractr)
 # -----------------------------
-
-# exact_extract returns a list of data.frames (one per polygon). We include:
-# - all layers from pred_stack
-# - x/y coordinates
-# - cell indices
-# - the polygon class attribute
 tDF_list <- exactextractr::exact_extract(
-  pred_stack,
+  pred_stack_t,
   train_areas,
-  force_df       = TRUE,
-  include_cell   = TRUE,
-  include_xy     = TRUE,
-  full_colnames  = TRUE,
-  include_cols   = class_field
+  force_df      = TRUE,
+  include_cell  = TRUE,
+  include_xy    = TRUE,
+  full_colnames = TRUE,
+  include_cols  = class_field
 )
 
 tDF <- dplyr::bind_rows(tDF_list)
 
-# Drop rows with any NA in predictors or missing class
-tDF <- tDF[complete.cases(tDF), ]
-
-# Ensure class is a factor
+tDF <- tDF[stats::complete.cases(tDF), ]
 tDF[[class_field]] <- as.factor(tDF[[class_field]])
 
-message("Extracted ", nrow(tDF), " training pixels with class information.")
-print(summary(tDF[[class_field]]))
-
-# -----------------------------
-# 5) Train/test split (caret)
-# -----------------------------
-
-set.seed(123)
-
-# Identify predictor columns (exclude cell/x/y/class/coverage_fraction)
+# predictor columns (exclude bookkeeping)
 drop_cols <- c("cell", "x", "y", class_field, "coverage_fraction")
 predictor_cols <- setdiff(colnames(tDF), drop_cols)
 
+# -----------------------------
+# 5) Train/test split
+# -----------------------------
+set.seed(123)
 idx <- caret::createDataPartition(
-  y = tDF[[class_field]],
-  p = 0.7,        # 70% training, 30% test
+  y    = tDF[[class_field]],
+  p    = 0.7,
   list = FALSE
 )
 
-trainDat <- tDF[idx, c(class_field, predictor_cols, "x", "y")]
+trainDat <- tDF[idx,  c(class_field, predictor_cols, "x", "y")]
 testDat  <- tDF[-idx, c(class_field, predictor_cols, "x", "y")]
 
 # -----------------------------
-# 6) Maximum Likelihood Classification (MLC) via superClass()
+# 6) MLC (RStoolbox::superClass)
 # -----------------------------
-
-# superClass still expects Spatial* objects for training data
 sp_trainDat <- trainDat
 sp_testDat  <- testDat
 
-# Convert to SpatialPointsDataFrame
 sp::coordinates(sp_trainDat) <- ~ x + y
 sp::coordinates(sp_testDat)  <- ~ x + y
 
-# Set CRS from the CDSE stack
-sp::proj4string(sp_trainDat) <- terra::crs(pred_stack, proj = TRUE)
-sp::proj4string(sp_testDat)  <- terra::crs(pred_stack, proj = TRUE)
+# keep it as in your previous codebase: proj4 from raster stack
+sp::proj4string(sp_trainDat) <- sp::CRS(raster::crs(pred_stack_r))
+sp::proj4string(sp_testDat)  <- sp::CRS(raster::crs(pred_stack_r))
 
-# Fit MLC only for this ONE time slice
 mlc_model <- RStoolbox::superClass(
-  img           = pred_stack,
-  trainData     = sp_trainDat,
-  valData       = sp_testDat,
-  responseCol   = class_field,
-  model         = "mlc",
-  tuneLength    = 1,
-  verbose       = TRUE
+  img         = pred_stack_r,
+  trainData   = sp_trainDat,
+  valData     = sp_testDat,
+  responseCol = class_field,
+  model       = "mlc",
+  tuneLength  = 1,
+  verbose     = TRUE
 )
 
-mlc_map <- mlc_model$map
-
-terra::writeRaster(
-  mlc_map,
-  here::here("data", "classification_mlc_2018.tif"),
+raster::writeRaster(
+  mlc_model$map,
+  filename  = out_mlc,
   overwrite = TRUE
 )
 
-message("MLC classification written to data/classification_mlc_2018.tif")
-
 # -----------------------------
-# 7) Random Forest classification (caret + randomForest)
+# 7) Random Forest (caret)
 # -----------------------------
-
 ctrl <- caret::trainControl(
   method          = "cv",
   number          = 10,
@@ -197,66 +150,39 @@ ctrl <- caret::trainControl(
 )
 
 set.seed(123)
-
 rf_model <- caret::train(
-  x         = trainDat[, predictor_cols],
-  y         = trainDat[[class_field]],
-  method    = "rf",
-  metric    = "Kappa",
-  trControl = ctrl,
+  x          = trainDat[, predictor_cols, drop = FALSE],
+  y          = trainDat[[class_field]],
+  method     = "rf",
+  metric     = "Kappa",
+  trControl  = ctrl,
   importance = TRUE
 )
 
-print(rf_model)
+# Predict RF on raster (use raster::predict with caret model)
+rf_map <- raster::predict(
+  object    = pred_stack_r,
+  model     = rf_model,
+  type      = "raw",
+  progress  = "text",
+  na.rm     = TRUE
+)
 
-# Predict RF on the CDSE stack for this one time slice
-rf_map <- terra::predict(pred_stack, rf_model, na.rm = TRUE)
-
-terra::writeRaster(
+raster::writeRaster(
   rf_map,
-  here::here("data", "classification_rf_2018.tif"),
+  filename  = out_rf,
   overwrite = TRUE
 )
 
-message("RF classification written to data/classification_rf_2018.tif")
-
 # -----------------------------
-# 8) Confusion matrix for RF (test set)
-# -------------------------------------------------------------------
-#  Confusion matrix ONLY for Random Forest classification
-#
-#  IMPORTANT:
-#  - We compute a confusion matrix for the Random Forest model because:
-#       • RF is trained using caret::train(), which explicitly separates
-#         training and test data and expects external accuracy assessment.
-#
-#  - We DO NOT compute a confusion matrix for the Maximum Likelihood (MLC)
-#    classification because:
-#       • RStoolbox::superClass() already performs its own internal
-#         train/validation split and produces accuracy statistics internally.
-#       • Running an additional confusion matrix outside superClass()
-#         would mix evaluation strategies and lead to inconsistent metrics.
-#
-#  → Therefore: RF gets an external confusion matrix, MLC does not.
-# -------------------------------------------------------------------
+# 8) RF confusion matrix + save model
+# -----------------------------
+rf_pred_test <- stats::predict(rf_model, newdata = testDat[, predictor_cols, drop = FALSE])
 
-# Predict classes for the independent RF test data
-rf_pred_test <- predict(rf_model, newdata = testDat[, predictor_cols, drop = FALSE])
-
-
-# Compute confusion matrix for Random Forest
 cm_rf <- caret::confusionMatrix(
   data      = rf_pred_test,
   reference = testDat[[class_field]]
 )
 
-
-cm_rf
-message("Random Forest confusion matrix (test data):")
-print(cm_rf)
-
-# Optionally save the model + confusion matrix
-saveRDS(rf_model, here::here("data", "rf_model_2018_cdse.rds"))
-saveRDS(cm_rf,    here::here("data", "rf_confusion_2018_cdse.rds"))
-
-message("Done: k-means, MLC, and RF classification for ONE CDSE time slice (pred_stack_2018).")
+saveRDS(rf_model, out_rf_model)
+saveRDS(cm_rf,    out_rf_conf)
