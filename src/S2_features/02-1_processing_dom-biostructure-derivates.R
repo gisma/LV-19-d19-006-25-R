@@ -3,7 +3,7 @@
 # src/02-1_processing_dem-derivates-saga.R
 #
 # Terrain derivatives via SAGA (Rsagacmd), written as ONE multi-band GeoTIFF stack.
-# Base input is the 1 m DEM; a target resolution can be selected via resampling.
+# Base input is the 1 m DEM; a target resolution can be selected via aggregation.
 #
 # Output logic:
 # - Canonical outputs are resolved via `paths[[<key>]]` (from metadata/outputs.tsv).
@@ -11,31 +11,25 @@
 
 source("src/_core/01-setup-burgwald.R")
 
-3# --- SAGA wrapper (one global instance) --------------------------------------
+# --- SAGA wrapper (one global instance) --------------------------------------
 saga <- Rsagacmd::saga_gis(
   raster_backend = "terra",
   vector_backend = "sf",
   all_outputs    = FALSE
 )
 
-# ensure_parent_dir <- function(path) {
-#   dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
-#   invisible(TRUE)
-# }
-
 #' Derive relief layers from a DEM (SAGA) and write them as a single GeoTIFF stack
 #'
 #' What this does (high level):
-#' 1) Optionally resample the base DEM to a target resolution (e.g., 10 m).
+#' 1) Aggregate the base 1 m DEM to a target resolution (e.g., 10 m) by block stats.
 #' 2) Fill sinks (Wang & Liu).
 #' 3) Compute slope / aspect / curvatures (SAGA "Slope, Aspect, Curvature").
 #' 4) Compute multi-scale TPI for given radii in meters.
-#' 5) Write ONE multi-band GeoTIFF and (optionally) 
+#' 5) Write ONE multi-band GeoTIFF.
 #'
-#' Notes on “SAGA temp files”:
-#' Rsagacmd usually manages SAGA I/O through temp grids, but depending on backend
-#' and module behaviour you can still end up with .sdat/.sgrd sidecars in outdir.
-#' If that happens, `cleanup_saga_sidecars = TRUE` removes them by prefix match.
+#' Note:
+#' - For target_res_m we prefer aggregate() over resample() to obtain a true
+#'   area-representative DEM at coarser scale (10x10 cells for 1m -> 10m).
 saga_derive_relief_stack <- function(dem_1m,
                                      prefix,
                                      out_stack_file,
@@ -50,27 +44,36 @@ saga_derive_relief_stack <- function(dem_1m,
   
   # Use provided SAGA instance or create one here
   if (is.null(saga_obj)) {
-    saga_obj <- Rs.player <- Rsagacmd::saga_gis(
+    saga_obj <- Rsagacmd::saga_gis(
       raster_backend = "terra",
       vector_backend = "sf",
       all_outputs    = TRUE
     )
   }
-  #ensure_parent_dir(out_stack_file)
+  
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   
-  # --- 0) Optional resampling from the 1 m base DEM --------------------------
+  # --- 0) Optional aggregation from the 1 m base DEM -------------------------
   dem <- dem_1m
   
   if (!is.null(target_res_m)) {
-    # Build a target grid that shares extent+CRS but has the requested resolution.
-    # We use a template raster and then resample.
-    tpl <- terra::rast(
-      extent = terra::ext(dem_1m),
-      crs    = terra::crs(dem_1m),
-      resolution = target_res_m
-    )
-    dem <- terra::resample(dem_1m, tpl, method = resample_method)
+    res_m <- terra::res(dem_1m)[1]
+    
+    # Prefer strict block aggregation if ratio is (near) integer
+    ratio <- target_res_m / res_m
+    ratio_round <- as.integer(round(ratio))
+    
+    if (abs(ratio - ratio_round) < 1e-6 && ratio_round >= 2) {
+      dem <- terra::aggregate(dem_1m, fact = ratio_round, fun = mean, na.rm = TRUE)
+    } else {
+      # Fallback (should not happen in your intended 1m->10m workflow)
+      tpl <- terra::rast(
+        extent     = terra::ext(dem_1m),
+        crs        = terra::crs(dem_1m),
+        resolution = target_res_m
+      )
+      dem <- terra::resample(dem_1m, tpl, method = resample_method)
+    }
   }
   
   # --- 1) Fill sinks (Wang & Liu) -------------------------------------------
@@ -119,7 +122,6 @@ saga_derive_relief_stack <- function(dem_1m,
   
   terra::writeRaster(out_stack, out_stack_file, overwrite = TRUE)
   
-
   invisible(out_stack_file)
 }
 
@@ -131,6 +133,9 @@ saga_derive_relief_stack <- function(dem_1m,
 #' - Strahler order (strahler)
 #' - watershed / basin id (watershed_id)
 #' - distance to stream (optional)
+#'
+#' Note:
+#' - Same scaling rule as relief: 1 m -> 10 m via aggregate() when ratio is integer.
 saga_derive_hydro_rasters <- function(dem_1m,
                                       out_flowacc_file,
                                       out_strahler_file,
@@ -154,13 +159,21 @@ saga_derive_hydro_rasters <- function(dem_1m,
   
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   
-  # --- 0) Resample to target resolution (must match relief grid) ------------
-  tpl <- terra::rast(
-    extent     = terra::ext(dem_1m),
-    crs        = terra::crs(dem_1m),
-    resolution = target_res_m
-  )
-  dem_10m <- terra::resample(dem_1m, tpl, method = resample_method)
+  # --- 0) Aggregate to target resolution (must match relief grid) ------------
+  res_m <- terra::res(dem_1m)[1]
+  ratio <- target_res_m / res_m
+  ratio_round <- as.integer(round(ratio))
+  
+  if (abs(ratio - ratio_round) < 1e-6 && ratio_round >= 2) {
+    dem_10m <- terra::aggregate(dem_1m, fact = ratio_round, fun = mean, na.rm = TRUE)
+  } else {
+    tpl <- terra::rast(
+      extent     = terra::ext(dem_1m),
+      crs        = terra::crs(dem_1m),
+      resolution = target_res_m
+    )
+    dem_10m <- terra::resample(dem_1m, tpl, method = resample_method)
+  }
   
   # --- 1) Fill sinks (same as relief) --------------------------------------
   dem_filled <- saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
@@ -169,27 +182,18 @@ saga_derive_hydro_rasters <- function(dem_1m,
   )
   
   # --- 2) Flow accumulation -------------------------------------------------
-  # NOTE: exact module name may differ depending on Rsagacmd version;
-  # use the corresponding ta_hydrology flow accumulation wrapper in your setup.
   flowacc <- saga_obj$ta_hydrology$flow_accumulation_top_down(
     elevation = dem_filled
   )
   
   # --- 3) Channel network + basins + Strahler order ------------------------
-  # Typical SAGA workflow:
-  # - derive channels from flow accumulation (threshold)
-  # - compute drainage basins / watershed ids
-  # - compute Strahler order along channel network
-  #
-  # NOTE: exact wrapper names may differ; keep the workflow, map to your Rsagacmd functions.
-  
   # example threshold; tune later, but must be explicit
   flow_threshold <- 2000
   
   channels <- saga_obj$ta_channels$channel_network(
-    elevation      = dem_filled,
-    flow           = flowacc,
-    threshold      = flow_threshold
+    elevation = dem_filled,
+    flow      = flowacc,
+    threshold = flow_threshold
   )
   
   basins <- saga_obj$ta_channels$drainage_basins(
@@ -210,15 +214,15 @@ saga_derive_hydro_rasters <- function(dem_1m,
   }
   
   # --- 5) Write single-band outputs ----------------------------------------
-  terra::writeRaster(terra::rast(flowacc),   out_flowacc_file,   overwrite = TRUE)
-  terra::writeRaster(terra::rast(strahler),  out_strahler_file,  overwrite = TRUE)
-  terra::writeRaster(terra::rast(basins),    out_watershed_file, overwrite = TRUE)
+  terra::writeRaster(terra::rast(flowacc),  out_flowacc_file,   overwrite = TRUE)
+  terra::writeRaster(terra::rast(strahler), out_strahler_file,  overwrite = TRUE)
+  terra::writeRaster(terra::rast(basins),   out_watershed_file, overwrite = TRUE)
   
   invisible(list(
-    flowacc   = out_flowacc_file,
-    strahler  = out_strahler_file,
-    watershed = out_watershed_file,
-    dist2stream = out_dist2stream_file
+    flowacc      = out_flowacc_file,
+    strahler     = out_strahler_file,
+    watershed    = out_watershed_file,
+    dist2stream  = out_dist2stream_file
   ))
 }
 
@@ -233,7 +237,7 @@ dem_1m <- terra::rast(dem_1m_file)
 # ---------------------------------------------------------------------------
 # YOUR CHOSEN SETUP:
 # - Base model = 1 m DEM
-# - Target resolution for derivatives = 10 m
+# - Target resolution for derivatives = 10 m (via aggregate, not resample)
 # - TPI radii (meters): micro=30, meso=50, macro=250
 # - Output = ONE stack GeoTIFF (canonical key from outputs.tsv)
 # ---------------------------------------------------------------------------
@@ -248,7 +252,8 @@ saga_derive_relief_stack(
   target_res_m    = 10,
   resample_method = "bilinear",
   tpi_scales_m    = c(30, 50, 250),
-  minslope        = 0.1
+  minslope        = 0.1,
+  saga_obj        = saga
 )
 
 message("Wrote relief stack: ", out_10m)
@@ -265,20 +270,19 @@ out_watershed <- paths[["watershed_id_10m"]]
 out_dist2str  <- paths[["dist_to_stream_10m"]]
 
 saga_derive_hydro_rasters(
-  dem_1m              = dem_1m,
-  out_flowacc_file    = out_flowacc,
-  out_strahler_file   = out_strahler,
-  out_watershed_file  = out_watershed,
-  out_dist2stream_file= out_dist2str,
-  outdir              = dirname(out_flowacc),
-  target_res_m         = 10,
-  resample_method      = "bilinear",
-  minslope             = 0.1,
-  saga_obj             = saga
+  dem_1m               = dem_1m,
+  out_flowacc_file     = out_flowacc,
+  out_strahler_file    = out_strahler,
+  out_watershed_file   = out_watershed,
+  out_dist2stream_file = out_dist2str,
+  outdir               = dirname(out_flowacc),
+  target_res_m          = 10,
+  resample_method       = "bilinear",
+  minslope              = 0.1,
+  saga_obj              = saga
 )
 
 message("Wrote hydrology: ", out_flowacc)
 message("Wrote hydrology: ", out_strahler)
 message("Wrote hydrology: ", out_watershed)
 message("Wrote hydrology: ", out_dist2str)
-
