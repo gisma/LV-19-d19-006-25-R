@@ -6,6 +6,9 @@ S1_observation	aoi_dgm	topography	tif	# S4_physio
 S1_observation	aoi_dom	topography	tif	# S4_physio
 S1_observation	aoi_clc	landcover	tif	# S4_cover (fallback)
 
+# manual ground-truth points for pixel classification (segment-based label propagation)
+S1_observation    gt_points_lc    landcover    gpkg    
+
 # =========================================================
 # S2 — Classification / landcover
 # =========================================================

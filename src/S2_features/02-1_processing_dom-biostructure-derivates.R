@@ -1,288 +1,129 @@
 #!/usr/bin/env Rscript
 
-# src/02-1_processing_dem-derivates-saga.R
+############################################################
+# Script:  02-2_processing_biostructure_chm-derivates.R
+# Project: Burgwald
 #
-# Terrain derivatives via SAGA (Rsagacmd), written as ONE multi-band GeoTIFF stack.
-# Base input is the 1 m DEM; a target resolution can be selected via aggregation.
+# Purpose:
+#   Produce canonical S2 biostructure rasters required by:
+#     04-4_signatures_biostructure_metrics.R
 #
-# Output logic:
-# - Canonical outputs are resolved via `paths[[<key>]]` (from metadata/outputs.tsv).
-# - This script writes ONLY the final stack(s). No “work_*” artefacts.
+# Canonical outputs (via paths[] / outputs.tsv):
+#   - chm_mean_10m         (tif)
+#   - chm_p95_10m          (tif)
+#   - chm_sd_10m           (tif)
+#   - canopy_fraction_10m  (tif)
+#
+# Inputs (canonical S1):
+#   - aoi_dgm  (DEM, 1 m)
+#   - aoi_dom  (DOM/DSM, 1 m)
+#
+# Design rules:
+#   - No extra productive artifacts / keys.
+#   - All outputs are explicit file paths from paths[].
+#   - Intermediate dCHM is computed in-memory (or tmp only).
+############################################################
 
-source("src/_core/01-setup-burgwald.R")
+suppressPackageStartupMessages({
+  library(here)
+  library(terra)
+})
 
-# --- SAGA wrapper (one global instance) --------------------------------------
-saga <- Rsagacmd::saga_gis(
-  raster_backend = "terra",
-  vector_backend = "sf",
-  all_outputs    = FALSE
-)
+source(here::here("src", "_core", "01-setup-burgwald.R"))
 
-#' Derive relief layers from a DEM (SAGA) and write them as a single GeoTIFF stack
-#'
-#' What this does (high level):
-#' 1) Aggregate the base 1 m DEM to a target resolution (e.g., 10 m) by block stats.
-#' 2) Fill sinks (Wang & Liu).
-#' 3) Compute slope / aspect / curvatures (SAGA "Slope, Aspect, Curvature").
-#' 4) Compute multi-scale TPI for given radii in meters.
-#' 5) Write ONE multi-band GeoTIFF.
-#'
-#' Note:
-#' - For target_res_m we prefer aggregate() over resample() to obtain a true
-#'   area-representative DEM at coarser scale (10x10 cells for 1m -> 10m).
-saga_derive_relief_stack <- function(dem_1m,
-                                     prefix,
-                                     out_stack_file,
-                                     outdir              = dirname(out_stack_file),
-                                     target_res_m        = NULL,
-                                     resample_method     = c("bilinear", "near"),
-                                     minslope            = 0.1,
-                                     tpi_scales_m        = c(30, 50, 250),
-                                     saga_obj            = NULL) {
-  
-  resample_method <- match.arg(resample_method)
-  
-  # Use provided SAGA instance or create one here
-  if (is.null(saga_obj)) {
-    saga_obj <- Rsagacmd::saga_gis(
-      raster_backend = "terra",
-      vector_backend = "sf",
-      all_outputs    = TRUE
-    )
-  }
-  
-  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  
-  # --- 0) Optional aggregation from the 1 m base DEM -------------------------
-  dem <- dem_1m
-  
-  if (!is.null(target_res_m)) {
-    res_m <- terra::res(dem_1m)[1]
-    
-    # Prefer strict block aggregation if ratio is (near) integer
-    ratio <- target_res_m / res_m
-    ratio_round <- as.integer(round(ratio))
-    
-    if (abs(ratio - ratio_round) < 1e-6 && ratio_round >= 2) {
-      dem <- terra::aggregate(dem_1m, fact = ratio_round, fun = mean, na.rm = TRUE)
-    } else {
-      # Fallback (should not happen in your intended 1m->10m workflow)
-      tpl <- terra::rast(
-        extent     = terra::ext(dem_1m),
-        crs        = terra::crs(dem_1m),
-        resolution = target_res_m
-      )
-      dem <- terra::resample(dem_1m, tpl, method = resample_method)
-    }
-  }
-  
-  # --- 1) Fill sinks (Wang & Liu) -------------------------------------------
-  dem_filled <- saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
-    elev     = dem,
-    minslope = minslope
-  )
-  
-  # --- 2) Slope / aspect / curvatures --------------------------------------
-  lsps <- saga_obj$ta_morphometry$slope_aspect_curvature(
-    elevation   = dem_filled,
-    method      = 6,  # SAGA method id as in your current script
-    unit_slope  = 0,  # radians
-    unit_aspect = 0   # radians
-  )
-  lsps_stack <- terra::rast(lsps)
-  
-  # --- 3) Multi-scale TPI (radii in meters) ---------------------------------
-  tpi_rasters <- vector("list", length(tpi_scales_m))
-  for (i in seq_along(tpi_scales_m)) {
-    Rm <- tpi_scales_m[i]
-    tpi_rasters[[i]] <- saga_obj$ta_morphometry$topographic_position_index_tpi(
-      dem        = dem_filled,
-      radius_min = 0,
-      radius_max = Rm,
-      standard   = TRUE
-    )
-  }
-  tpi_stack <- terra::rast(tpi_rasters)
-  
-  # --- 4) Assemble final stack (one file) -----------------------------------
-  out_stack <- c(dem_filled, lsps_stack, tpi_stack)
-  
-  # Layer naming: stable + explicit
-  n_lsps <- terra::nlyr(lsps_stack)
-  lsps_names <- names(lsps_stack)
-  if (is.null(lsps_names) || any(!nzchar(lsps_names))) {
-    lsps_names <- paste0("lsps_", seq_len(n_lsps))
-  }
-  
-  names(out_stack) <- c(
-    "dem_filled",
-    lsps_names,
-    paste0("tpi_r", tpi_scales_m, "m")
-  )
-  
-  terra::writeRaster(out_stack, out_stack_file, overwrite = TRUE)
-  
-  invisible(out_stack_file)
+# -------------------------------------------------------------------
+# Productive inputs (canonical S1)
+# -------------------------------------------------------------------
+dem_file <- paths[["aoi_dgm"]]
+dom_file <- paths[["aoi_dom"]]
+
+stopifnot(file.exists(dem_file), file.exists(dom_file))
+
+dem_1m <- terra::rast(dem_file)
+dom_1m <- terra::rast(dom_file)
+
+# -------------------------------------------------------------------
+# Productive outputs (canonical S2_features / structure)
+# -------------------------------------------------------------------
+out_chm_mean_10m <- paths[["chm_mean_10m"]]
+out_chm_p95_10m  <- paths[["chm_p95_10m"]]
+out_chm_sd_10m   <- paths[["chm_sd_10m"]]
+out_canfrac_10m  <- paths[["canopy_fraction_10m"]]
+
+dir.create(dirname(out_chm_mean_10m), recursive = TRUE, showWarnings = FALSE)
+dir.create(dirname(out_chm_p95_10m),  recursive = TRUE, showWarnings = FALSE)
+dir.create(dirname(out_chm_sd_10m),   recursive = TRUE, showWarnings = FALSE)
+dir.create(dirname(out_canfrac_10m),  recursive = TRUE, showWarnings = FALSE)
+
+# -------------------------------------------------------------------
+# Parameters (explicit)
+# -------------------------------------------------------------------
+target_res_m <- 10
+canopy_thr_m <- 2.0   # canopy pixel threshold on dCHM (meters)
+
+# -------------------------------------------------------------------
+# 1) Harmonise grids (DOM onto DEM grid if needed)
+# -------------------------------------------------------------------
+# hard rule: compute dCHM on a consistent 1 m grid.
+# If grids differ, we resample DOM to DEM grid.
+same_grid <- identical(terra::crs(dem_1m), terra::crs(dom_1m)) &&
+  all.equal(terra::res(dem_1m), terra::res(dom_1m)) &&
+  terra::ext(dem_1m) == terra::ext(dom_1m)
+
+if (!same_grid) {
+  dom_1m <- terra::resample(dom_1m, dem_1m, method = "bilinear")
 }
 
+# -------------------------------------------------------------------
+# 2) dCHM (DOM - DEM), clamp negatives to 0 (explicit choice)
+# -------------------------------------------------------------------
+dchm_1m <- dom_1m - dem_1m
+dchm_1m <- terra::clamp(dchm_1m, lower = 0, values = TRUE)
 
-#' Derive hydrology layers from a DEM (SAGA) and write them as single-band GeoTIFFs
-#'
-#' Outputs (each as its own GeoTIFF):
-#' - flow accumulation (flowacc)
-#' - Strahler order (strahler)
-#' - watershed / basin id (watershed_id)
-#' - distance to stream (optional)
-#'
-#' Note:
-#' - Same scaling rule as relief: 1 m -> 10 m via aggregate() when ratio is integer.
-saga_derive_hydro_rasters <- function(dem_1m,
-                                      out_flowacc_file,
-                                      out_strahler_file,
-                                      out_watershed_file,
-                                      out_dist2stream_file = NULL,
-                                      outdir              = dirname(out_flowacc_file),
-                                      target_res_m        = 10,
-                                      resample_method     = c("bilinear", "near"),
-                                      minslope            = 0.1,
-                                      saga_obj            = NULL) {
-  
-  resample_method <- match.arg(resample_method)
-  
-  if (is.null(saga_obj)) {
-    saga_obj <- Rsagacmd::saga_gis(
-      raster_backend = "terra",
-      vector_backend = "sf",
-      all_outputs    = FALSE
-    )
-  }
-  
-  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  
-  # --- 0) Aggregate to target resolution (must match relief grid) ------------
-  res_m <- terra::res(dem_1m)[1]
-  ratio <- target_res_m / res_m
-  ratio_round <- as.integer(round(ratio))
-  
-  if (abs(ratio - ratio_round) < 1e-6 && ratio_round >= 2) {
-    dem_10m <- terra::aggregate(dem_1m, fact = ratio_round, fun = mean, na.rm = TRUE)
-  } else {
-    tpl <- terra::rast(
-      extent     = terra::ext(dem_1m),
-      crs        = terra::crs(dem_1m),
-      resolution = target_res_m
-    )
-    dem_10m <- terra::resample(dem_1m, tpl, method = resample_method)
-  }
-  
-  # --- 1) Fill sinks (same as relief) --------------------------------------
-  dem_filled <- saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
-    elev     = dem_10m,
-    minslope = minslope
-  )
-  
-  # --- 2) Flow accumulation -------------------------------------------------
-  flowacc <- saga_obj$ta_hydrology$flow_accumulation_top_down(
-    elevation = dem_filled
-  )
-  
-  # --- 3) Channel network + basins + Strahler order ------------------------
-  # example threshold; tune later, but must be explicit
-  flow_threshold <- 2000
-  
-  channels <- saga_obj$ta_channels$channel_network(
-    elevation = dem_filled,
-    flow      = flowacc,
-    threshold = flow_threshold
-  )
-  
-  basins <- saga_obj$ta_channels$drainage_basins(
-    channels = channels,
-    flow     = flowacc
-  )
-  
-  strahler <- saga_obj$ta_channels$strahler_order(
-    channels = channels
-  )
-  
-  # --- 4) Optional distance-to-stream grid ---------------------------------
-  if (!is.null(out_dist2stream_file)) {
-    dist2stream <- saga_obj$grid_tools$proximity_grid(
-      features = channels
-    )
-    terra::writeRaster(terra::rast(dist2stream), out_dist2stream_file, overwrite = TRUE)
-  }
-  
-  # --- 5) Write single-band outputs ----------------------------------------
-  terra::writeRaster(terra::rast(flowacc),  out_flowacc_file,   overwrite = TRUE)
-  terra::writeRaster(terra::rast(strahler), out_strahler_file,  overwrite = TRUE)
-  terra::writeRaster(terra::rast(basins),   out_watershed_file, overwrite = TRUE)
-  
-  invisible(list(
-    flowacc      = out_flowacc_file,
-    strahler     = out_strahler_file,
-    watershed    = out_watershed_file,
-    dist2stream  = out_dist2stream_file
-  ))
+# -------------------------------------------------------------------
+# 3) Aggregate 1 m -> 10 m as strict block stats (no segmentation)
+# -------------------------------------------------------------------
+res_m <- terra::res(dchm_1m)[1]
+ratio <- target_res_m / res_m
+fact  <- as.integer(round(ratio))
+
+if (abs(ratio - fact) > 1e-6 || fact < 2) {
+  stop("Resolution ratio not integer enough for strict block aggregation: res(dCHM) = ",
+       res_m, " m; target_res_m = ", target_res_m)
 }
 
+# mean
+chm_mean_10m <- terra::aggregate(dchm_1m, fact = fact, fun = mean, na.rm = TRUE)
 
-# ---------------------------------------------------------------------------
-# Base DEM (1 m) comes from canonical S1 output: key = aoi_dgm
-# ---------------------------------------------------------------------------
-dem_1m_file <- paths[["aoi_dgm"]]
-stopifnot(file.exists(dem_1m_file))
-dem_1m <- terra::rast(dem_1m_file)
+# p95 (explicit quantile)
+p95_fun <- function(x) {
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  as.numeric(stats::quantile(x, probs = 0.95, na.rm = TRUE, names = FALSE, type = 7))
+}
+chm_p95_10m <- terra::aggregate(dchm_1m, fact = fact, fun = p95_fun)
 
-# ---------------------------------------------------------------------------
-# YOUR CHOSEN SETUP:
-# - Base model = 1 m DEM
-# - Target resolution for derivatives = 10 m (via aggregate, not resample)
-# - TPI radii (meters): micro=30, meso=50, macro=250
-# - Output = ONE stack GeoTIFF (canonical key from outputs.tsv)
-# ---------------------------------------------------------------------------
+# sd
+sd_fun <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) < 2) return(NA_real_)
+  stats::sd(x)
+}
+chm_sd_10m <- terra::aggregate(dchm_1m, fact = fact, fun = sd_fun)
 
-out_10m <- paths[["relief_stack_10m"]]
+# canopy fraction: fraction of 1 m pixels above threshold within each 10 m block
+can_mask <- dchm_1m > canopy_thr_m
+canopy_fraction_10m <- terra::aggregate(can_mask, fact = fact, fun = mean, na.rm = TRUE)
 
-saga_derive_relief_stack(
-  dem_1m          = dem_1m,
-  prefix          = "relief_10m_burgwald",
-  out_stack_file  = out_10m,
-  outdir          = dirname(out_10m),
-  target_res_m    = 10,
-  resample_method = "bilinear",
-  tpi_scales_m    = c(30, 50, 250),
-  minslope        = 0.1,
-  saga_obj        = saga
-)
+# -------------------------------------------------------------------
+# 4) Write canonical outputs
+# -------------------------------------------------------------------
+terra::writeRaster(chm_mean_10m,        out_chm_mean_10m, overwrite = TRUE)
+terra::writeRaster(chm_p95_10m,         out_chm_p95_10m,  overwrite = TRUE)
+terra::writeRaster(chm_sd_10m,          out_chm_sd_10m,   overwrite = TRUE)
+terra::writeRaster(canopy_fraction_10m, out_canfrac_10m,  overwrite = TRUE)
 
-message("Wrote relief stack: ", out_10m)
-
-# ---------------------------------------------------------------------------
-# Hydrology derivatives (SAGA) — written as single-band GeoTIFFs
-# Canonical keys from outputs.tsv:
-#   flowacc_10m, strahler_order_10m, watershed_id_10m, dist_to_stream_10m
-# ---------------------------------------------------------------------------
-
-out_flowacc   <- paths[["flowacc_10m"]]
-out_strahler  <- paths[["strahler_order_10m"]]
-out_watershed <- paths[["watershed_id_10m"]]
-out_dist2str  <- paths[["dist_to_stream_10m"]]
-
-saga_derive_hydro_rasters(
-  dem_1m               = dem_1m,
-  out_flowacc_file     = out_flowacc,
-  out_strahler_file    = out_strahler,
-  out_watershed_file   = out_watershed,
-  out_dist2stream_file = out_dist2str,
-  outdir               = dirname(out_flowacc),
-  target_res_m          = 10,
-  resample_method       = "bilinear",
-  minslope              = 0.1,
-  saga_obj              = saga
-)
-
-message("Wrote hydrology: ", out_flowacc)
-message("Wrote hydrology: ", out_strahler)
-message("Wrote hydrology: ", out_watershed)
-message("Wrote hydrology: ", out_dist2str)
+message("Wrote: ", out_chm_mean_10m)
+message("Wrote: ", out_chm_p95_10m)
+message("Wrote: ", out_chm_sd_10m)
+message("Wrote: ", out_canfrac_10m)

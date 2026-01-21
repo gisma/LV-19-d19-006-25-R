@@ -657,11 +657,95 @@ make_param_perturbations <- function(spatialr, ranger, minsize,
 
 
 
-
-
+# =============================================================================
+# build_scales_A()
+# =============================================================================
+# Project: Burgwald Decision Stack
+# File:    metrics-fun.R
+#
+# PURPOSE
+# -------
+# Derive a *set of candidate segmentation scales* (MeanShift parameter seeds)
+# from vegetation patch geometry on a 10 m master grid.
+#
+# This function was originally "ad-hoc": it accepted a 1 m CHM, aggregated it
+# to 10 m inside the helper, created a vegetation mask, then computed connected
+# vegetation patches and translated patch-size quantiles into scale parameters.
+#
+# CLEAN ARCHITECTURE CHANGE (S2-first)
+# ------------------------------------
+# To avoid redundant, implicit derivations inside helpers, the function is now
+# "S2-first": it consumes *canonical 10 m biostructure products* created by the
+# dedicated S2 processing step:
+#
+#   - chm_p95_10m          (preferred; robust canopy-top proxy)
+#   - canopy_fraction_10m  (optional; fraction of 1 m pixels above threshold)
+#
+# This aligns with the Burgwald contract logic:
+#   S2 computes stable, versioned products; helpers do not re-derive them.
+#
+# FALLBACKS
+# ---------
+# - If S2 products are not provided, the function can still use a 1 m CHM
+#   (legacy mode) to preserve existing behaviour.
+# - If no structural input is available, it returns a provided fallback scale
+#   table or a fixed manual default.
+#
+# INPUTS
+# ------
+# master_10m_raster : Raster (path or SpatRaster)
+#   Defines the target 10 m grid (extent, resolution, projection).
+#   This is the *master alignment grid* used for patch analysis.
+#
+# chm_p95_10m : Raster (path or SpatRaster), optional (S2-first)
+#   10 m raster of the 95th percentile of (d)CHM values computed from 1 m pixels.
+#   Used to define vegetation presence per 10 m cell:
+#     veg_10m = chm_p95_10m > chm_thr_m
+#
+# canopy_fraction_10m : Raster (path or SpatRaster), optional (S2-first)
+#   10 m raster with fraction of 1 m pixels above chm_thr_m (e.g., 2 m).
+#   Used as alternative vegetation presence signal:
+#     veg_10m = canopy_fraction_10m > 0
+#
+# chm_1m : Raster (path or SpatRaster), optional (legacy)
+#   1 m CHM used only if S2 products are unavailable. Legacy mode computes
+#   chm_max_10m internally:
+#     chm_max_10m = aggregate(chm_1m, fact=10, fun=max)
+#     veg_10m     = chm_max_10m > chm_thr_m
+#
+# OUTPUT
+# ------
+# tibble with scale candidates:
+#   - scale_id  : label for each candidate (e.g., "s20m", "s30m", ...)
+#   - spatialr  : MeanShift spatial radius (in 10 m pixels)
+#   - ranger    : placeholder (NA; to be filled by feature-space logic elsewhere)
+#   - minsize   : MeanShift minsize (in 10 m pixels; patch-area proxy)
+#   - scale_source : provenance tag describing which input drove the scale logic
+#
+# SEMANTICS
+# ---------
+# Vegetation threshold:
+#   chm_thr_m is interpreted as canopy presence threshold in meters (default=2).
+#   This is consistent with the project-wide vegetation definition.
+#
+# Patch quantiles:
+#   Patch areas are converted to an "equivalent radius" r_eq (meters):
+#     r_eq = sqrt(area / pi)
+#   Quantiles of r_eq determine candidate spatialr and minsize.
+#
+# NOTES
+# -----
+# - This is an operational heuristic; it does not claim that vegetation patches
+#   define the "true" segmentation scale, only that they provide a stable,
+#   interpretable signal to seed scale exploration.
+# =============================================================================
 
 build_scales_A <- function(master_10m_raster,
                            chm_1m = NULL,
+                           # --- S2-first inputs (canonical 10 m products) ----
+                           chm_p95_10m = NULL,
+                           canopy_fraction_10m = NULL,
+                           # -------------------------------------------------
                            scale_ids = c("s20m","s30m","s40m","s60m","s80m","s120m"),
                            fallback_scales = NULL,
                            chm_thr_m = 2,
@@ -669,96 +753,159 @@ build_scales_A <- function(master_10m_raster,
                            min_patch_px_10m = 4L,
                            max_spatialr = 30L) {
   
-  # master pixel size in meters (assumes projected CRS in meters)
-  res10 <- terra::res(terra::rast(master_10m_raster))[1]
-  if (!is.finite(res10) || res10 <= 0) stop("Cannot read resolution from master_10m_raster.")
+  # --- Master grid ------------------------------------------------------------
+  # The master raster defines the target 10 m grid used for patch analysis.
+  master <- terra::rast(master_10m_raster)
   
-  # ---- Fallback: use provided fallback or your known manual grid ------------
-  if (is.null(chm_1m)) {
-    if (!is.null(fallback_scales)) {
-      return(fallback_scales)
-    }
-    # default fallback = your grid (keeps your current behavior)
-    return(tibble::tibble(
+  # Read the nominal pixel size in meters (assumes projected CRS in meters).
+  res10 <- terra::res(master)[1]
+  if (!is.finite(res10) || res10 <= 0) {
+    stop("Cannot read resolution from master_10m_raster.")
+  }
+  
+  # --- Helper: return a consistent fallback scale table -----------------------
+  # We keep the previous behaviour: if no CHM signal is available, use fallback
+  # or a fixed manual table.
+  fallback_table <- function(scale_source) {
+    if (!is.null(fallback_scales)) return(fallback_scales)
+    tibble::tibble(
       scale_id = scale_ids,
       spatialr = c(2, 3, 4, 6, 8, 12),
       ranger   = c(0.06, 0.08, 0.10, 0.12, 0.14, 0.16),
       minsize  = c(30, 40, 50, 80, 100, 150),
-      scale_source = "fallback_manual"
-    ))
+      scale_source = scale_source
+    )
   }
   
-  # ---- CHM path ------------------------------------------------------------
-  chm <- terra::rast(chm_1m)
+  # --- 1) Build vegetation mask on 10 m grid (S2-first) -----------------------
+  # The goal is a binary veg_10m raster (0/1) aligned to the master grid.
+  #
+  # Priority:
+  #  (a) chm_p95_10m         -> veg_10m = p95 > thr
+  #  (b) canopy_fraction_10m -> veg_10m = fraction > 0 (any canopy in the cell)
+  #  (c) chm_1m (legacy)     -> derive chm_max_10m -> veg_10m = max > thr
+  #
+  # The scale_source tag is carried into the output for provenance.
+  veg_10m <- NULL
+  scale_source <- NULL
   
-  # bring CHM to master extent (optional; safe)
-  chm <- terra::crop(chm, terra::ext(terra::rast(master_10m_raster)))
+  # (a) Preferred: S2 product chm_p95_10m
+  if (!is.null(chm_p95_10m)) {
+    r_p95 <- terra::rast(chm_p95_10m)
+    
+    # Align to master extent/grid: crop, then resample if geometry differs.
+    r_p95 <- terra::crop(r_p95, terra::ext(master))
+    if (!terra::compareGeom(r_p95, master, stopOnError = FALSE)) {
+      r_p95 <- terra::resample(r_p95, master, method = "bilinear")
+    }
+    
+    # Vegetation presence: robust canopy-top proxy above threshold
+    veg_10m <- terra::as.int(r_p95 > chm_thr_m)
+    scale_source <- "s2_chm_p95_10m"
+  }
   
-  # derive 10m vegetation mask from CHM: max height in 10m cell
-  # (max is robust for canopy presence; avoids "mean height dilution")
-  chm_max_10m <- terra::aggregate(chm, fact = as.integer(round(res10 / terra::res(chm)[1])),
-                                  fun = "max", na.rm = TRUE)
+  # (b) Alternative: S2 product canopy_fraction_10m
+  if (is.null(veg_10m) && !is.null(canopy_fraction_10m)) {
+    r_cf <- terra::rast(canopy_fraction_10m)
+    
+    r_cf <- terra::crop(r_cf, terra::ext(master))
+    if (!terra::compareGeom(r_cf, master, stopOnError = FALSE)) {
+      r_cf <- terra::resample(r_cf, master, method = "bilinear")
+    }
+    
+    # Strict mapping for "presence":
+    # fraction > 0 means at least one 1 m pixel above threshold in the 10 m cell.
+    veg_10m <- terra::as.int(r_cf > 0)
+    scale_source <- "s2_canopy_fraction_10m"
+  }
   
-  veg_10m <- chm_max_10m > chm_thr_m
-  veg_10m <- terra::as.int(veg_10m)
+  # (c) Legacy fallback: derive veg_10m from 1 m CHM inside the helper
+  # This keeps backwards compatibility, but reintroduces the ad-hoc derivation.
+  if (is.null(veg_10m) && !is.null(chm_1m)) {
+    chm <- terra::rast(chm_1m)
+    
+    # Restrict to master extent.
+    chm <- terra::crop(chm, terra::ext(master))
+    
+    # Compute 10 m max height (presence proxy)
+    # NOTE: this is the legacy behaviour; S2-first mode avoids this step.
+    fact <- as.integer(round(res10 / terra::res(chm)[1]))
+    if (!is.finite(fact) || fact < 1) {
+      stop("Invalid aggregation factor from chm_1m to master grid.")
+    }
+    
+    chm_max_10m <- terra::aggregate(chm, fact = fact, fun = "max", na.rm = TRUE)
+    if (!terra::compareGeom(chm_max_10m, master, stopOnError = FALSE)) {
+      chm_max_10m <- terra::resample(chm_max_10m, master, method = "bilinear")
+    }
+    
+    veg_10m <- terra::as.int(chm_max_10m > chm_thr_m)
+    scale_source <- "legacy_chm1m_max_to_10m"
+  }
   
-  # patch labeling (connected components)
+  # If we still have no vegetation signal, return fallback.
+  if (is.null(veg_10m)) {
+    return(fallback_table("fallback_no_struct_input"))
+  }
+  
+  # --- 2) Connected-component patches (10 m) ---------------------------------
+  # We treat veg_10m as a binary raster and compute connected patches using 8-neighbourhood.
   patches <- terra::patches(veg_10m, directions = 8)
   
+  # Extract patch frequency table: (patch_id, n_px)
   fr <- terra::freq(patches)
-  fr <- fr[!is.na(fr[,1]), , drop = FALSE]
+  fr <- fr[!is.na(fr[, 1]), , drop = FALSE]
+  
+  # No patches -> fallback
   if (is.null(fr) || nrow(fr) == 0) {
-    # fallback if CHM yields nothing
-    return(tibble::tibble(
-      scale_id = scale_ids,
-      spatialr = c(2, 3, 4, 6, 8, 12),
-      ranger   = c(0.06, 0.08, 0.10, 0.12, 0.14, 0.16),
-      minsize  = c(30, 40, 50, 80, 100, 150),
-      scale_source = "fallback_chm_empty"
-    ))
+    return(fallback_table(paste0("fallback_", scale_source, "_empty")))
   }
   
-  names(fr) <- c("patch_id","n_px")
-  fr <- fr[fr$n_px >= min_patch_px_10m, , drop = FALSE]
+  names(fr) <- c("patch_id", "n_px")
   
+  # Filter: discard tiny patches (in 10 m pixels)
+  fr <- fr[fr$n_px >= as.integer(min_patch_px_10m), , drop = FALSE]
   if (nrow(fr) == 0) {
-    return(tibble::tibble(
-      scale_id = scale_ids,
-      spatialr = c(2, 3, 4, 6, 8, 12),
-      ranger   = c(0.06, 0.08, 0.10, 0.12, 0.14, 0.16),
-      minsize  = c(30, 40, 50, 80, 100, 150),
-      scale_source = "fallback_chm_patches_too_small"
-    ))
+    return(fallback_table(paste0("fallback_", scale_source, "_patches_too_small")))
   }
   
-  # patch areas in m^2 at 10m
+  # --- 3) Translate patch-size quantiles -> scale parameters ------------------
+  # Patch area in m^2 per patch (pixel area = res10^2)
   A <- fr$n_px * (res10 * res10)
-  r_eq <- sqrt(A / pi)  # equivalent radius (m)
   
+  # Equivalent radius (meters) for a circle with area A
+  r_eq <- sqrt(A / pi)
+  
+  # Quantiles of patch radius define candidate scales
   rq <- as.numeric(stats::quantile(r_eq, probs = patch_quantiles, na.rm = TRUE))
   rq <- unique(rq)
   
-  # map radius to spatialr in 10m pixels
-  spatialr <- pmin(max_spatialr, pmax(1L, as.integer(round(rq / res10))))
+  # Map radii (m) to spatialr in 10 m pixels
+  spatialr <- pmin(as.integer(max_spatialr),
+                   pmax(1L, as.integer(round(rq / res10))))
   
-  # map radius to minsize (area in 10m pixels)
+  # Map radii to minsize as equivalent patch area in 10 m pixels
   minsize <- pmax(1L, as.integer(round((pi * rq^2) / (res10 * res10))))
   
-  # keep exactly length(scale_ids) by padding/truncating
+  # Enforce output length == length(scale_ids) by padding/truncation
   k <- length(scale_ids)
-  if (length(spatialr) < k) spatialr <- c(spatialr, rep(tail(spatialr,1), k - length(spatialr)))
-  if (length(minsize)  < k) minsize  <- c(minsize,  rep(tail(minsize,1),  k - length(minsize)))
+  if (length(spatialr) < k) spatialr <- c(spatialr, rep(tail(spatialr, 1), k - length(spatialr)))
+  if (length(minsize)  < k) minsize  <- c(minsize,  rep(tail(minsize, 1),  k - length(minsize)))
   spatialr <- spatialr[seq_len(k)]
   minsize  <- minsize[seq_len(k)]
   
+  # --- 4) Return scale table --------------------------------------------------
+  # ranger is left as NA here; it is derived later from feature-space distances
+  # (see derive_ranger_from_pca / assign_ranger_to_scales).
   tibble::tibble(
     scale_id = scale_ids,
     spatialr = spatialr,
-    ranger   = NA_real_,           # ranger comes from feature space (next function)
+    ranger   = NA_real_,
     minsize  = minsize,
-    scale_source = "chm_patch_quantiles"
+    scale_source = scale_source
   )
 }
+
 
 derive_ranger_from_pca <- function(pca_file,
                                    n = 50000L,

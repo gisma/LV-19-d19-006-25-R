@@ -136,8 +136,10 @@ stopifnot(file.exists(pca_file))
 
 # --- build scales: CHM-based if available, else fallback manual grid ----------
 scales <- build_scales_A(
-  master_10m_raster = pca_file,
-  chm_1m = NULL  # später: Pfad zum CHM/DOM/DSM
+  master_10m_raster      = pca_file,
+  chm_p95_10m            = paths[["chm_p95_10m"]],
+  canopy_fraction_10m   = paths[["canopy_fraction_10m"]],
+  chm_1m                 = NULL
 )
 
 # If build_scales_A returned fallback with ranger already filled, keep it.
