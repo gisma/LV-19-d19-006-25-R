@@ -45,7 +45,7 @@ suppressPackageStartupMessages({
 })
 
 source(here::here("src", "_core", "01-setup-burgwald.R"))
-source(here::here("src", "r-libs", "metrics-fun.R"))
+
 
 ## -------------------------------------------------------------------
 ## 1) Productive input (from outputs.tsv)

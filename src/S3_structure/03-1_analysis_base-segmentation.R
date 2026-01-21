@@ -289,6 +289,37 @@ names(pol)[names(pol) == lab_name] <- "segment_id"
 seg_sf <- sf::st_as_sf(pol)
 seg_sf$segment_id <- as.integer(seg_sf$segment_id)
 
+# ---------------------------------------------------------------
+# (8.5) Clip segmentation to AOI (mandatory)
+# ---------------------------------------------------------------
+
+
+aoi_sf <- aoi_burgwald_wgs
+
+# CRS harmonisation
+if (!identical(sf::st_crs(aoi_sf)$wkt, sf::st_crs(seg_sf)$wkt)) {
+  aoi_sf <- sf::st_transform(aoi_sf, sf::st_crs(seg_sf))
+}
+
+# minimal validity fix (only if needed)
+if (any(!sf::st_is_valid(aoi_sf)))  aoi_sf  <- sf::st_make_valid(aoi_sf)
+if (any(!sf::st_is_valid(seg_sf)))  seg_sf  <- sf::st_make_valid(seg_sf)
+
+# dissolve AOI to single polygon (robust clipping)
+aoi_union <- sf::st_union(aoi_sf)
+
+# clip
+seg_sf <- sf::st_intersection(seg_sf, aoi_union)
+
+# drop empty geometries (edge cases)
+seg_sf <- seg_sf[!sf::st_is_empty(seg_sf), ]
+
+# enforce exactly one geometry per segment_id
+seg_sf <- seg_sf %>%
+  dplyr::group_by(segment_id) %>%
+  dplyr::summarise(geometry = sf::st_union(geometry), .groups = "drop")
+
+
 # Write to productive path from outputs.tsv (overwrite if exists).
 if (file.exists(seg_file)) {
   try(sf::st_delete_dsn(seg_file), silent = TRUE)

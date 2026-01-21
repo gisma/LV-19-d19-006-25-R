@@ -7,9 +7,14 @@
 #   Build the full segment signature attrstack (S4_signatures) by
 #   joining all S4 signature layers onto the stable segment geometry.
 #
-#   - NO computation of new metrics
+#   - NO computation of new metrics (domain metrics are already computed)
 #   - NO decisions
 #   - NO clustering
+#
+#   Additionally (transparent, post-join):
+#   - derive robust 1/2/3 token columns (low/mid/high) for selected
+#     continuous signatures
+#   - derive compact label strings (e.g. physio_elev-1_slope-3_...)
 #
 # Inputs (productive, from outputs.tsv via paths[]):
 #   - layer0_segments                    (S3_structure, gpkg)  [geometry backbone]
@@ -107,6 +112,44 @@ out_sf <- segs_sf %>%
   dplyr::left_join(hydro_df,  by = "segment_id") %>%
   dplyr::left_join(cover_df,  by = "segment_id") %>%
   dplyr::left_join(bio_df,    by = "segment_id")
+
+## -------------------------------------------------------------------
+## 5b) Transparent tokens/labels (post-join, still S4_signatures)
+## -------------------------------------------------------------------
+# Goal:
+#   Create robust, stable-ish categorical tokens (1/2/3 = low/mid/high)
+#   from continuous signatures, plus compact label strings.
+#
+# Important:
+#   - This is NOT clustering (no k, no seeds)
+#   - It is purely a distribution-based discretisation for readability,
+#     filtering, and scenario constraints in S5.
+
+req_physio_cols <- c("elev_mean", "slope_mean_deg", "southness_mean", "forest_fraction")
+stopifnot(all(req_physio_cols %in% names(out_sf)))
+
+geom <- sf::st_geometry(out_sf)
+out_df <- sf::st_drop_geometry(out_sf)
+
+# 1/2/3 tokens using tertiles (default probs = 1/3, 2/3)
+out_df <- add_bin123_tokens(out_df, cols = req_physio_cols)
+
+# Compact physio label (lowercase stems, "-1/-2/-3" codes)
+out_df <- add_regime_label_from_bins(
+  out_df,
+  prefix = "physio",
+  map = c(
+    elev_mean_bin123        = "elev",
+    slope_mean_deg_bin123   = "slope",
+    southness_mean_bin123   = "south",
+    forest_fraction_bin123  = "forest"
+  ),
+  out_col = "physio_token"
+)
+
+# Reattach geometry
+out_df$geometry <- geom
+out_sf <- sf::st_as_sf(out_df)
 
 ## -------------------------------------------------------------------
 ## 6) Write productive output

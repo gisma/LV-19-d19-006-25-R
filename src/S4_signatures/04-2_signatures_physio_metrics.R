@@ -39,22 +39,8 @@ suppressPackageStartupMessages({
 ## ---------------------------------------------------------
 ## 0) Setup / Registry
 ## ---------------------------------------------------------
-# Expect: paths (named list) created by your project setup.
-# If your repo uses 00-setup-burgwald.R to build paths, source it here.
-if (!exists("paths")) {
-  if (file.exists("00-setup-burgwald.R")) {
-    source("00-setup-burgwald.R")
-  } else {
-    stop("Object 'paths' not found and 00-setup-burgwald.R not present in working directory.")
-  }
-}
-stopifnot(is.list(paths))
 
-req_keys <- c("layer0_segments", "aoi_dgm", "layer0_attr_physio_metrics")
-missing_keys <- setdiff(req_keys, names(paths))
-if (length(missing_keys) > 0) {
-  stop("Missing required registry keys in 'paths': ", paste(missing_keys, collapse = ", "))
-}
+source(here::here("src","_core","01-setup-burgwald.R"))
 
 seg_file <- paths[["layer0_segments"]]
 dem_file <- paths[["aoi_dgm"]]
@@ -172,9 +158,22 @@ physio_df <- tibble(
 ## ---------------------------------------------------------
 ## 6) Attach to geometry + write product
 ## ---------------------------------------------------------
+segments_sf <- sf::read_sf(seg_file)
+
+if (!identical(sf::st_crs(segments_sf)$wkt, crs_dem)) {
+  segments_sf <- sf::st_transform(segments_sf, crs_dem)
+}
+# sicherstellen, dass es sf ist
+stopifnot(inherits(segments_sf, "sf"))
+
+# Geometriename robust holen
+geom_col <- attr(segments_sf, "sf_column")
+stopifnot(is.character(geom_col), geom_col %in% names(segments_sf))
+
 out_sf <- segments_sf %>%
-  dplyr::select(segment_id, geometry) %>%
-  dplyr::left_join(physio_df, by = "segment_id")
+  dplyr::select(segment_id, dplyr::all_of(geom_col)) %>%
+  dplyr::left_join(physio_df, by = "segment_id") %>%
+  sf::st_as_sf()
 
 # Ensure output directory exists
 out_dir <- dirname(out_file)

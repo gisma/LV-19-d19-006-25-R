@@ -43,33 +43,14 @@ suppressPackageStartupMessages({
 ## ---------------------------------------------------------
 ## 0) Setup / Registry
 ## ---------------------------------------------------------
-if (!exists("paths")) {
-  if (file.exists("00-setup-burgwald.R")) {
-    source("00-setup-burgwald.R")
-  } else {
-    stop("Object 'paths' not found and 00-setup-burgwald.R not present in working directory.")
-  }
-}
-stopifnot(is.list(paths))
 
-req_keys <- c("layer0_segments", "layer0_attr_cover_metrics")
-missing_keys <- setdiff(req_keys, names(paths))
-if (length(missing_keys) > 0) {
-  stop("Missing required registry keys in 'paths': ", paste(missing_keys, collapse = ", "))
-}
+source(here::here("src","_core","01-setup-burgwald.R"))
 
 seg_file <- paths[["layer0_segments"]]
 out_file <- paths[["layer0_attr_cover_metrics"]]
 
 # Prefer RF classification; fall back to CLC
-lc_key <- NULL
-if ("classification_rf" %in% names(paths) && file.exists(paths[["classification_rf"]])) {
-  lc_key <- "classification_rf"
-} else if ("aoi_clc" %in% names(paths) && file.exists(paths[["aoi_clc"]])) {
-  lc_key <- "aoi_clc"
-} else {
-  stop("No landcover raster found. Expected paths[['classification_rf']] or paths[['aoi_clc']].")
-}
+lc_key <- "aoi_clc" #"classification_rf"
 lc_file <- paths[[lc_key]]
 
 message("Input segments:  ", seg_file)

@@ -2,40 +2,51 @@
 
 # src/02-1_processing_dem-derivates-saga.R
 #
-# Terrain derivatives via SAGA (Rsagacmd), written as ONE multi-band GeoTIFF stack.
-# Base input is the 1 m DEM; a target resolution can be selected via resampling.
+# Terrain and hydrological derivatives using SAGA GIS (via Rsagacmd).
 #
-# Output logic:
-# - Canonical outputs are resolved via `paths[[<key>]]` (from metadata/outputs.tsv).
-# - This script writes ONLY the final stack(s). No “work_*” artefacts.
+# Design principles:
+# - All SAGA tools are called with EXPLICIT output file arguments.
+# - Intermediate products are passed as FILE PATHS, not as terra objects.
+# - SAGA writes *.sgrd/*.sdat pairs; terra always reads the *.sdat side.
+# - Only final products are exported as GeoTIFF stacks.
+#
+# This avoids implicit wrapper behaviour, version-dependent naming,
+# and terra <-> SAGA ping-pong artefacts.
 
 source("src/_core/01-setup-burgwald.R")
 
-3# --- SAGA wrapper (one global instance) --------------------------------------
+suppressPackageStartupMessages({
+  library(terra)
+  library(sf)
+  library(Rsagacmd)
+})
+
+# ---------------------------------------------------------------------------
+# Global SAGA instance
+# ---------------------------------------------------------------------------
+
 saga <- Rsagacmd::saga_gis(
   raster_backend = "terra",
   vector_backend = "sf",
   all_outputs    = FALSE
 )
 
-# ensure_parent_dir <- function(path) {
-#   dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
-#   invisible(TRUE)
-# }
+# ===========================================================================
+# RELIEF DERIVATIVES
+# ===========================================================================
 
-#' Derive relief layers from a DEM (SAGA) and write them as a single GeoTIFF stack
+#' Derive relief layers from a DEM and write a multi-band GeoTIFF stack.
 #'
-#' What this does (high level):
-#' 1) Optionally resample the base DEM to a target resolution (e.g., 10 m).
-#' 2) Fill sinks (Wang & Liu).
-#' 3) Compute slope / aspect / curvatures (SAGA "Slope, Aspect, Curvature").
-#' 4) Compute multi-scale TPI for given radii in meters.
-#' 5) Write ONE multi-band GeoTIFF and (optionally) 
+#' Processing chain:
+#'   1) Optional resampling
+#'   2) Sink filling (Wang & Liu)
+#'   3) Slope / aspect / curvature (explicit outputs)
+#'   4) Multi-scale TPI (explicit outputs)
+#'   5) Stack assembly and export
 #'
-#' Notes on “SAGA temp files”:
-#' Rsagacmd usually manages SAGA I/O through temp grids, but depending on backend
-#' and module behaviour you can still end up with .sdat/.sgrd sidecars in outdir.
-#' If that happens, `cleanup_saga_sidecars = TRUE` removes them by prefix match.
+#' All SAGA outputs are written as *.sgrd/*.sdat and only loaded into terra
+#' once they exist on disk.
+
 saga_derive_relief_stack <- function(dem_1m,
                                      prefix,
                                      out_stack_file,
@@ -45,102 +56,6 @@ saga_derive_relief_stack <- function(dem_1m,
                                      minslope            = 0.1,
                                      tpi_scales_m        = c(30, 50, 250),
                                      saga_obj            = NULL) {
-  
-  resample_method <- match.arg(resample_method)
-  
-  # Use provided SAGA instance or create one here
-  if (is.null(saga_obj)) {
-    saga_obj <- Rs.player <- Rsagacmd::saga_gis(
-      raster_backend = "terra",
-      vector_backend = "sf",
-      all_outputs    = TRUE
-    )
-  }
-  #ensure_parent_dir(out_stack_file)
-  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  
-  # --- 0) Optional resampling from the 1 m base DEM --------------------------
-  dem <- dem_1m
-  
-  if (!is.null(target_res_m)) {
-    # Build a target grid that shares extent+CRS but has the requested resolution.
-    # We use a template raster and then resample.
-    tpl <- terra::rast(
-      extent = terra::ext(dem_1m),
-      crs    = terra::crs(dem_1m),
-      resolution = target_res_m
-    )
-    dem <- terra::resample(dem_1m, tpl, method = resample_method)
-  }
-  
-  # --- 1) Fill sinks (Wang & Liu) -------------------------------------------
-  dem_filled <- saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
-    elev     = dem,
-    minslope = minslope
-  )
-  
-  # --- 2) Slope / aspect / curvatures --------------------------------------
-  lsps <- saga_obj$ta_morphometry$slope_aspect_curvature(
-    elevation   = dem_filled,
-    method      = 6,  # SAGA method id as in your current script
-    unit_slope  = 0,  # radians
-    unit_aspect = 0   # radians
-  )
-  lsps_stack <- terra::rast(lsps)
-  
-  # --- 3) Multi-scale TPI (radii in meters) ---------------------------------
-  tpi_rasters <- vector("list", length(tpi_scales_m))
-  for (i in seq_along(tpi_scales_m)) {
-    Rm <- tpi_scales_m[i]
-    tpi_rasters[[i]] <- saga_obj$ta_morphometry$topographic_position_index_tpi(
-      dem        = dem_filled,
-      radius_min = 0,
-      radius_max = Rm,
-      standard   = TRUE
-    )
-  }
-  tpi_stack <- terra::rast(tpi_rasters)
-  
-  # --- 4) Assemble final stack (one file) -----------------------------------
-  out_stack <- c(dem_filled, lsps_stack, tpi_stack)
-  
-  # Layer naming: stable + explicit
-  n_lsps <- terra::nlyr(lsps_stack)
-  lsps_names <- names(lsps_stack)
-  if (is.null(lsps_names) || any(!nzchar(lsps_names))) {
-    lsps_names <- paste0("lsps_", seq_len(n_lsps))
-  }
-  
-  names(out_stack) <- c(
-    "dem_filled",
-    lsps_names,
-    paste0("tpi_r", tpi_scales_m, "m")
-  )
-  
-  terra::writeRaster(out_stack, out_stack_file, overwrite = TRUE)
-  
-
-  invisible(out_stack_file)
-}
-
-
-#' Derive hydrology layers from a DEM (SAGA) and write them as single-band GeoTIFFs
-#'
-#' Outputs (each as its own GeoTIFF):
-#' - flow accumulation (flowacc)
-#' - Strahler order (strahler)
-#' - watershed / basin id (watershed_id)
-#' - distance to stream (optional)
-saga_derive_hydro_rasters <- function(dem_1m,
-                                      out_flowacc_file,
-                                      out_strahler_file,
-                                      out_watershed_file,
-                                      out_dist2stream_file = NULL,
-                                      outdir              = dirname(out_flowacc_file),
-                                      target_res_m        = 10,
-                                      resample_method     = c("bilinear", "near"),
-                                      minslope            = 0.1,
-                                      saga_obj            = NULL) {
   
   resample_method <- match.arg(resample_method)
   
@@ -154,90 +69,307 @@ saga_derive_hydro_rasters <- function(dem_1m,
   
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   
-  # --- 0) Resample to target resolution (must match relief grid) ------------
-  tpl <- terra::rast(
-    extent     = terra::ext(dem_1m),
-    crs        = terra::crs(dem_1m),
-    resolution = target_res_m
-  )
-  dem_10m <- terra::resample(dem_1m, tpl, method = resample_method)
+  # -------------------------------------------------------------------------
+  # 0) Optional resampling of the base DEM
+  # -------------------------------------------------------------------------
+  dem <- dem_1m
   
-  # --- 1) Fill sinks (same as relief) --------------------------------------
-  dem_filled <- saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
-    elev     = dem_10m,
+  if (!is.null(target_res_m)) {
+    tpl <- terra::rast(
+      extent     = terra::ext(dem_1m),
+      crs        = terra::crs(dem_1m),
+      resolution = target_res_m
+    )
+    dem <- terra::resample(dem_1m, tpl, method = resample_method)
+  }
+  
+  # -------------------------------------------------------------------------
+  # 1) Fill sinks (Wang & Liu XXL)
+  # -------------------------------------------------------------------------
+  dem_filled_file <- file.path(outdir, paste0(prefix, "_dem_filled.sgrd"))
+  
+  saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
+    elev     = dem,
+    filled   = dem_filled_file,
     minslope = minslope
   )
   
-  # --- 2) Flow accumulation -------------------------------------------------
-  # NOTE: exact module name may differ depending on Rsagacmd version;
-  # use the corresponding ta_hydrology flow accumulation wrapper in your setup.
-  flowacc <- saga_obj$ta_hydrology$flow_accumulation_top_down(
-    elevation = dem_filled
+  stopifnot(file.exists(dem_filled_file))
+  
+  dem_filled <- terra::rast(sub("\\.sgrd$", ".sdat", dem_filled_file))
+  
+  # -------------------------------------------------------------------------
+  # 2) Slope / aspect / curvatures (all outputs explicit)
+  # -------------------------------------------------------------------------
+  lsps_files <- list(
+    slope  = file.path(outdir, paste0(prefix, "_slope.sgrd")),
+    aspect = file.path(outdir, paste0(prefix, "_aspect.sgrd")),
+    c_gene = file.path(outdir, paste0(prefix, "_c_gene.sgrd")),
+    c_prof = file.path(outdir, paste0(prefix, "_c_prof.sgrd")),
+    c_plan = file.path(outdir, paste0(prefix, "_c_plan.sgrd")),
+    c_tang = file.path(outdir, paste0(prefix, "_c_tang.sgrd")),
+    c_long = file.path(outdir, paste0(prefix, "_c_long.sgrd")),
+    c_cros = file.path(outdir, paste0(prefix, "_c_cros.sgrd")),
+    c_mini = file.path(outdir, paste0(prefix, "_c_mini.sgrd")),
+    c_maxi = file.path(outdir, paste0(prefix, "_c_maxi.sgrd")),
+    c_tota = file.path(outdir, paste0(prefix, "_c_tota.sgrd")),
+    c_roto = file.path(outdir, paste0(prefix, "_c_roto.sgrd"))
   )
   
-  # --- 3) Channel network + basins + Strahler order ------------------------
-  # Typical SAGA workflow:
-  # - derive channels from flow accumulation (threshold)
-  # - compute drainage basins / watershed ids
-  # - compute Strahler order along channel network
-  #
-  # NOTE: exact wrapper names may differ; keep the workflow, map to your Rsagacmd functions.
-  
-  # example threshold; tune later, but must be explicit
-  flow_threshold <- 2000
-  
-  channels <- saga_obj$ta_channels$channel_network(
-    elevation      = dem_filled,
-    flow           = flowacc,
-    threshold      = flow_threshold
+  saga_obj$ta_morphometry$slope_aspect_curvature(
+    elevation   = dem_filled_file,
+    slope        = lsps_files$slope,
+    aspect       = lsps_files$aspect,
+    c_gene       = lsps_files$c_gene,
+    c_prof       = lsps_files$c_prof,
+    c_plan       = lsps_files$c_plan,
+    c_tang       = lsps_files$c_tang,
+    c_long       = lsps_files$c_long,
+    c_cros       = lsps_files$c_cros,
+    c_mini       = lsps_files$c_mini,
+    c_maxi       = lsps_files$c_maxi,
+    c_tota       = lsps_files$c_tota,
+    c_roto       = lsps_files$c_roto,
+    method       = 6,
+    unit_slope   = 0,
+    unit_aspect  = 0,
+    .verbose     = TRUE
   )
   
-  basins <- saga_obj$ta_channels$drainage_basins(
-    channels = channels,
-    flow     = flowacc
+  stopifnot(all(file.exists(unlist(lsps_files))))
+  
+  lsps_stack <- terra::rast(unlist(sub("\\.sgrd$", ".sdat", lsps_files)))
+  
+  # -------------------------------------------------------------------------
+  # 3) Multi-scale TPI (explicit outputs)
+  # -------------------------------------------------------------------------
+  tpi_files <- setNames(
+    file.path(outdir, paste0(prefix, "_tpi_r", tpi_scales_m, "m.sgrd")),
+    paste0("tpi_r", tpi_scales_m, "m")
   )
   
-  strahler <- saga_obj$ta_channels$strahler_order(
-    channels = channels
-  )
-  
-  # --- 4) Optional distance-to-stream grid ---------------------------------
-  if (!is.null(out_dist2stream_file)) {
-    dist2stream <- saga_obj$grid_tools$proximity_grid(
-      features = channels
+  for (i in seq_along(tpi_scales_m)) {
+    saga_obj$ta_morphometry$topographic_position_index_tpi(
+      dem        = dem_filled_file,
+      tpi        = tpi_files[i],
+      radius_min = 0,
+      radius_max = tpi_scales_m[i],
+      standard   = TRUE,
+      .verbose   = TRUE
     )
-    terra::writeRaster(terra::rast(dist2stream), out_dist2stream_file, overwrite = TRUE)
+    stopifnot(file.exists(tpi_files[i]))
   }
   
-  # --- 5) Write single-band outputs ----------------------------------------
-  terra::writeRaster(terra::rast(flowacc),   out_flowacc_file,   overwrite = TRUE)
-  terra::writeRaster(terra::rast(strahler),  out_strahler_file,  overwrite = TRUE)
-  terra::writeRaster(terra::rast(basins),    out_watershed_file, overwrite = TRUE)
+  tpi_stack <- terra::rast(unlist(sub("\\.sgrd$", ".sdat", tpi_files)))
+  
+  # -------------------------------------------------------------------------
+  # 4) Assemble and export relief stack
+  # -------------------------------------------------------------------------
+  out_stack <- c(dem_filled, lsps_stack, tpi_stack)
+  names(out_stack) <- make.names(names(out_stack), unique = TRUE)
+  
+  terra::writeRaster(out_stack, out_stack_file, overwrite = TRUE)
+  invisible(out_stack_file)
+}
+
+# ===========================================================================
+# HYDROLOGY DERIVATIVES
+# ===========================================================================
+
+#' Derive hydrological layers from a DEM and export both single products
+#' and a combined hydro stack.
+
+saga_derive_hydro_rasters <- function(
+    dem_1m,
+    out_flowacc_file,
+    out_strahler_file,
+    out_watershed_file,
+    out_dist2stream_file,
+    outdir,
+    target_res_m = 10,
+    resample_method = "bilinear",
+    minslope = 0.1,
+    saga_obj,
+    threshold = 1000,
+    .verbose = TRUE
+) {
+  
+  stopifnot(!is.null(saga_obj))
+  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+  
+  # -------------------------------------------------------------------------
+  # 1) DEM preparation (written as SAGA grid)
+  # -------------------------------------------------------------------------
+  dem_10m_file <- file.path(outdir, "dem10m.sdat")
+  terra::writeRaster(dem_1m, dem_10m_file, overwrite = TRUE)
+  
+  # -------------------------------------------------------------------------
+  # 2) Fill sinks
+  # -------------------------------------------------------------------------
+  dem_filled_file <- file.path(outdir, "dem10m_filled.sgrd")
+  
+  saga_obj$ta_preprocessor$fill_sinks_xxl_wang_liu(
+    elev     = dem_10m_file,
+    filled   = dem_filled_file,
+    minslope = minslope,
+    .verbose = .verbose
+  )
+  stopifnot(file.exists(dem_filled_file))
+  
+  # -------------------------------------------------------------------------
+  # 3) Flow accumulation
+  # -------------------------------------------------------------------------
+  flowacc_sgrd <- file.path(outdir, "flowacc_10m.sgrd")
+  
+  saga_obj$ta_hydrology$flow_accumulation_top_down(
+    elevation  = dem_filled_file,
+    accu_total = flowacc_sgrd,
+    .verbose   = .verbose
+  )
+  stopifnot(file.exists(flowacc_sgrd))
+  
+  terra::writeRaster(
+    terra::rast(sub("\\.sgrd$", ".sdat", flowacc_sgrd)),
+    out_flowacc_file,
+    overwrite = TRUE
+  )
+  
+  # -------------------------------------------------------------------------
+  # 4) Channel network and drainage basins
+  # -------------------------------------------------------------------------
+  channels_gpkg <- file.path(outdir, "channels.gpkg")
+  order_sgrd    <- file.path(outdir, "strahler_order_10m.sgrd")
+  basin_sgrd   <- file.path(outdir, "watershed_id_10m.sgrd")
+  basins_gpkg   <- file.path(outdir, "watershed_id_10m.gpkg")
+
+  saga_obj$ta_channels$channel_network_and_drainage_basins(
+    dem       = dem_filled_file,
+    threshold = threshold,
+    segments  = channels_gpkg,
+    order     = order_sgrd,
+    basin     = basin_sgrd,
+    basins    = basins_gpkg
+
+
+  )
+  
+  terra::writeRaster(terra::rast(sub("\\.sgrd$", ".sdat", order_sgrd)),
+                     out_strahler_file, overwrite = TRUE)
+  terra::writeRaster(terra::rast(sub("\\.sgrd$", ".sdat", basin_sgrd)),
+                     out_watershed_file, overwrite = TRUE)
+  
+  
+  
+  
+  # -------------------------------------------------------------------------
+  # 5) Overland flow distance to channel network (explicit outputs)
+  # -------------------------------------------------------------------------
+  # ------------------------------------------------------------
+  # Rasterize channel network (vector → grid for SAGA input)
+  # ------------------------------------------------------------
+  
+  channels_gpkg  <- file.path(outdir, "channels.gpkg")          # existing vector output
+  channels_sdat <- file.path(outdir, "channels_10m.sdat")     # terra output
+  channels_sgrd <- file.path(outdir, "channels_10m.sgrd")     # SAGA header
+  
+
+  
+  # reference grid: use filled DEM grid geometry
+  dem_ref <- terra::rast(sub("\\.sgrd$", ".sdat", dem_filled_file))
+  
+  channels_vect <- terra::vect(channels_gpkg)
+  
+  # rasterize: presence / binary mask (1 = channel, NA = no channel)
+  channels_rast <- terra::rasterize(
+    x     = channels_vect,
+    y     = dem_ref,
+    field = 1,
+    background = NA_real_
+  )
+  
+  # write as SAGA-compatible raster (terra writes .sdat)
+  terra::writeRaster(channels_rast, channels_sdat, overwrite = TRUE)
+  
+
+  # SAGA expects the .sgrd header; Rsagacmd will create it implicitly
+  # when the file is used as input, but some setups prefer it explicitly:
+  if (!file.exists(channels_sgrd)) {
+    file.copy(channels_sdat, channels_sgrd)
+  }
+  
+  
+  dist_files <- list(
+    distance = file.path(outdir, "dist_to_stream_10m.sgrd"),
+    distvert = file.path(outdir, "distvert_to_stream_10m.sgrd"),
+    cahnnels = file.path(outdir, "channels_10m.sgrd"),
+    disthorz = file.path(outdir, "disthorz_to_stream_10m.sgrd"),
+    time     = file.path(outdir, "flow_time_10m.sgrd"),
+    sdr      = file.path(outdir, "sdr_10m.sgrd"),
+    passes   = file.path(outdir, "passes_10m.sgrd")
+  )
+  
+  saga_obj$ta_channels$overland_flow_distance_to_channel_network(
+    elevation = dem_filled_file,
+    channels  = channels_sgrd,
+    distance  = dist_files$distance,
+    distvert  = dist_files$distvert,
+    disthorz  = dist_files$disthorz,
+    time      = dist_files$time,
+    sdr       = dist_files$sdr,
+    passes    = dist_files$passes,
+    method           = 1,
+    boundary         = FALSE,
+    flow_k_default   = 20,
+    flow_r_default   = 0.05,
+    .verbose = TRUE
+  )
+  
+  stopifnot(file.exists(dist_files$distance))
+  
+  terra::writeRaster(
+    terra::rast(sub("\\.sgrd$", ".sdat", dist_files$distance)),
+    out_dist2stream_file,
+    overwrite = TRUE
+  )
+  
+  # -------------------------------------------------------------------------
+  # 6) Assemble hydro stack
+  # -------------------------------------------------------------------------
+  hydro_files <- c(
+    flowacc   = flowacc_sgrd,
+    strahler  = order_sgrd,
+    watershed = basin_sgrd,
+    dist      = dist_files$distance
+  )
+  
+  hydro_stack <- terra::rast(sub("\\.sgrd$", ".sdat", hydro_files))
+  names(hydro_stack) <- names(hydro_files)
+  
+  hydro_stack_file <- file.path(outdir, "hydro_stack_10m.tif")
+  terra::writeRaster(hydro_stack, hydro_stack_file, overwrite = TRUE)
   
   invisible(list(
-    flowacc   = out_flowacc_file,
-    strahler  = out_strahler_file,
-    watershed = out_watershed_file,
-    dist2stream = out_dist2stream_file
+    dem_10m      = dem_10m_file,
+    dem_filled   = dem_filled_file,
+    flowacc_sgrd = flowacc_sgrd,
+    channels     = channels_gpkg,
+    order        = order_sgrd,
+    basin        = basin_sgrd,
+    basins       = basins_gpkg,
+    dist2stream  = dist_files$distance,
+    hydro_stack  = hydro_stack_file
   ))
 }
 
+# ===========================================================================
+# EXECUTION
+# ===========================================================================
 
-# ---------------------------------------------------------------------------
-# Base DEM (1 m) comes from canonical S1 output: key = aoi_dgm
-# ---------------------------------------------------------------------------
 dem_1m_file <- paths[["aoi_dgm"]]
 stopifnot(file.exists(dem_1m_file))
 dem_1m <- terra::rast(dem_1m_file)
 
-# ---------------------------------------------------------------------------
-# YOUR CHOSEN SETUP:
-# - Base model = 1 m DEM
-# - Target resolution for derivatives = 10 m
-# - TPI radii (meters): micro=30, meso=50, macro=250
-# - Output = ONE stack GeoTIFF (canonical key from outputs.tsv)
-# ---------------------------------------------------------------------------
-
+# --- Relief stack -----------------------------------------------------------
 out_10m <- paths[["relief_stack_10m"]]
 
 saga_derive_relief_stack(
@@ -248,29 +380,25 @@ saga_derive_relief_stack(
   target_res_m    = 10,
   resample_method = "bilinear",
   tpi_scales_m    = c(30, 50, 250),
-  minslope        = 0.1
+  minslope        = 0.1,
+  saga_obj        = saga
 )
 
 message("Wrote relief stack: ", out_10m)
 
-# ---------------------------------------------------------------------------
-# Hydrology derivatives (SAGA) — written as single-band GeoTIFFs
-# Canonical keys from outputs.tsv:
-#   flowacc_10m, strahler_order_10m, watershed_id_10m, dist_to_stream_10m
-# ---------------------------------------------------------------------------
-
+# --- Hydrology --------------------------------------------------------------
 out_flowacc   <- paths[["flowacc_10m"]]
 out_strahler  <- paths[["strahler_order_10m"]]
 out_watershed <- paths[["watershed_id_10m"]]
 out_dist2str  <- paths[["dist_to_stream_10m"]]
 
 saga_derive_hydro_rasters(
-  dem_1m              = dem_1m,
-  out_flowacc_file    = out_flowacc,
-  out_strahler_file   = out_strahler,
-  out_watershed_file  = out_watershed,
-  out_dist2stream_file= out_dist2str,
-  outdir              = dirname(out_flowacc),
+  dem_1m               = dem_1m,
+  out_flowacc_file     = out_flowacc,
+  out_strahler_file    = out_strahler,
+  out_watershed_file   = out_watershed,
+  out_dist2stream_file = out_dist2str,
+  outdir               = dirname(out_flowacc),
   target_res_m         = 10,
   resample_method      = "bilinear",
   minslope             = 0.1,
@@ -282,3 +410,24 @@ message("Wrote hydrology: ", out_strahler)
 message("Wrote hydrology: ", out_watershed)
 message("Wrote hydrology: ", out_dist2str)
 
+
+# out_gpkg <- paths[["hydrology_vectors_10m"]]
+# stopifnot(!is.null(out_gpkg))
+
+# # channels (line network)
+# stopifnot(file.exists(channels_gpkg))
+# ch <- sf::st_read(channels_gpkg, quiet = TRUE)
+# sf::st_write(ch, out_gpkg, layer = "channels", delete_layer = TRUE, quiet = TRUE)
+# 
+# # basins (polygons)
+# stopifnot(file.exists(basins_gpkg))
+# ba <- sf::st_read(basins_gpkg, quiet = TRUE)
+# sf::st_write(ba, out_gpkg, layer = "basins", delete_layer = TRUE, quiet = TRUE)
+# 
+# # optional nodes
+# if (exists("nodes_shp", inherits = FALSE) && file.exists(nodes_shp)) {
+#   nd <- sf::st_read(nodes_gpkg, quiet = TRUE)
+#   sf::st_write(nd, out_gpkg, layer = "nodes", delete_layer = TRUE, quiet = TRUE)
+# }
+# 
+# stopifnot(file.exists(out_gpkg))

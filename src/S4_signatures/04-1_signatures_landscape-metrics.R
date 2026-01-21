@@ -71,7 +71,7 @@ stopifnot(file.exists(lc_file))
 ## 2) Output (canonical)
 ## -------------------------------------------------------------------
 
-out_gpkg <- paths[["layer0_segments_it_metrics"]]
+out_gpkg <- paths[["layer0_attr_it_metrics"]]
 
 ## -------------------------------------------------------------------
 ## 3) Load data
@@ -88,6 +88,9 @@ segs$segment_id <- as.integer(segs$segment_id)
 
 # Landcover / classification raster (categorical)
 lc <- terra::rast(lc_file)
+
+crs_lc <- terra::crs(lc, proj = TRUE)
+if (!identical(sf::st_crs(segs)$wkt, crs_lc)) segs <- sf::st_transform(segs, crs_lc)
 
 ## -------------------------------------------------------------------
 ## 4) Metric 1: H(x) per segment (composition) using exactextractr

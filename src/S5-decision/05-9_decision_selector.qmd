@@ -1,172 +1,171 @@
 ---
-title: "S5 Selector — From Segment Signatures to Spatial Candidate Sets"
-format: html
+title: "Decision Selector Tutorial"
+subtitle: "Burgwald • S4 signatures → S5 decisions (domain + selector) → S6 validation"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+execute:
+  echo: true
+  warning: false
+  message: true
 ---
 
+## Goals 
 
-The S5 selector converts the segment signature space into concrete spatial candidate sets.
-It does not compute new metrics, clusters, or models.
-Its role is to translate a spatial question into a reproducible selection rule.
+This tutorial explains the **decision support workflow** for the Burgwald rain gauge network after segmentation and attributation (signatures) are fixed.
 
-A selector setting expresses:
+- **S4_signatures** provides the *single "truth" source* on segment level:
+  `layer0_segments_attrstack_metrics.gpkg`
+- **S5 decisions** derives candidate selections:
+  - per-domain (IT / physio / hydro / biostructure / coverage)
+  - plus a **constraint-based selector** for scenario runs
+- **S6 validation** compares scenario outputs (coverage, spacing, overlap, representativeness)
 
-> **where selection is allowed, what must be represented, and how strongly candidates must be spatially separated.**
+This approach does **not** change segmentation geometry, and it does **not** re-derive S4.
 
-Segments already carry meaning through their signatures
-(cover fractions, domain strata, representativeness distances).
-The selector only interprets these attributes.
+## Architecture at a glance
 
 
+<a href="fig/05-9-overall-decision-path.svg" target="_blank">
+  <img src="fig/05-9-overall-decision-path.svg"
+       alt="Burgwald decision support architecture: S4→S5→S6"
+       style="width:100%; cursor: zoom-in;">
+</a>
 
-## Typical Use Cases and Parameter Settings
 
-Each use case corresponds directly to one selector setting.
-Only the parameters below need to be changed.
+- **MCDA** is a *scoring module* (one function, one truth).
+- **Selector** is the *design engine* (constraints + coverage + spacing).
+- MCDA can be used:
+  1) standalone (baseline, global ranking)
+  2) optionally inside the selector for internal scoring
 
+## Inputs and outputs (minimal)
 
+### Input (truth source)
 
-### Use Case 1 — Forest Monitoring Network
+- `S4_signatures / layer0_segments_attrstack_metrics (gpkg)`
 
-**Question**
-Where should monitoring sites be placed inside forest stands so that different terrain situations are represented and sites remain spatially independent?
+Expected to contain:
+- `segment_id` and polygon geometry
+- domain distances: `it_dist_to_center`, `physio_dist_to_center`, `hydro_dist_to_center`, `bio_dist_to_center`, `cov_dist_to_center`
+- strata labels for coverage targets (e.g. `physio_stratum`, `cov_stratum`, …)
+- coverage fractions for hard filters (e.g. `cov_forest`)
 
-**Parameter setting**
+## Two ways to rank segments
 
-```R
-filter_expr   = "cov_forest >= 0.8"
-target_col    = "physio_stratum"
-rank_cols     = c("physio_dist_to_center")
-n_per_target  = 3
-d_min_m       = 500
-```
+### 1) MCDA standalone (baseline ranking)
 
-**Interpretation**
+**Purpose:** “Overall representativeness” ranking without constraints.
 
-* Only forest-dominated segments are admissible.
-* Physiographic domains define what must be covered.
-* Typical segments per domain are preferred.
-* Sites are spatially separated by at least 500 m.
+- Pros: simple, fast, explains global landscape gradients well
+- Limits: no spacing, no guarantee to cover strata, no hard filters
 
+Implementation:
+- Script: `05-9_decisions_mcda_fuse_metrics.R`
+- Core scoring: `mcda_add_score()` (in `metrics-fun.R`)
 
+MCDA computes:
 
-### Use Case 2 — Forest vs Non-Forest Comparison
+- normalize each distance column to 0..1
+- weighted sum → `mcda_score` (lower is better)
 
-**Question**
-How do forest and non-forest areas differ under identical sampling logic?
+Important decision:
+- `norm_scope="global"` for the standalone baseline (rank across the full AOI)
 
-Two selector runs are executed with identical targets and spacing, only the filter changes.
+### 2) Selector settings (constraint-based design)
 
-**Forest run**
+**Purpose:** “Design under constraints” – produce candidates that are:
+- allowed (hard filter),
+- cover a target space (strata),
+- spatially distributed (spacing),
+- and ranked by a model of representativeness.
 
-```R
-filter_expr   = "cov_forest >= 0.8"
-target_col    = "physio_stratum"
-rank_cols     = c("physio_dist_to_center")
-n_per_target  = 3
-d_min_m       = 500
-```
+Implementation:
+- Script: `05-9_decisions_selector_settings.R`
 
-**Non-forest run**
+A selector *setting* always has four knobs:
 
-```R
-filter_expr   = "cov_forest < 0.2"
-target_col    = "physio_stratum"
-rank_cols     = c("physio_dist_to_center")
-n_per_target  = 3
-d_min_m       = 500
-```
+1) `filter_expr`  
+   The allowed subset (e.g. forest-only, within a watershed).
 
-**Interpretation**
+2) `target_col` + `n_per_target`  
+   What must be covered (e.g. `physio_stratum`, 3 per stratum).
 
-* Both selections cover identical physiographic domains.
-* Differences arise purely from land-cover context.
-* Results are directly comparable.
+3) ranking  
+   Two ranking modes:
 
+   **A) lexicographic (`rank_mode="lex"`)**  
+   You provide `rank_cols` in order; the first dominates, others break ties.
 
+   **B) MCDA (`rank_mode="mcda"`)**  
+   The selector calls `mcda_add_score()` on the filtered subset and ranks by `mcda_score`.
 
-### Use Case 3 — Land-Use / Land-Cover Representation
+4) `d_min_m`  
+   Greedy thinning to enforce spacing (e.g. 500 m).
 
-**Question**
-How can different land-use compositions be spatially represented without dominance by a single class?
+### When to use lex vs MCDA inside the selector
 
-**Parameter setting**
+Use **lex** when you want explicit priority logic:
+- “First cover LUCC well, then among those pick good physio representatives.”
 
-```R
-filter_expr   = NULL
-target_col    = "cov_stratum"
-rank_cols     = c("cov_dist_to_center", "physio_dist_to_center")
-n_per_target  = 3
-d_min_m       = 500
-```
+Use **MCDA** when you want real trade-offs:
+- “Balance physio + hydro + structure while still meeting coverage and spacing.”
 
-**Interpretation**
-
-* All segments are admissible.
-* LUCC clusters define representation units.
-* Typical land-use compositions are preferred.
-* Physiography acts as a secondary stabilizer.
-* Spatial thinning avoids clustering.
-
-
-
-### Use Case 4 — Watershed-Internal Sampling
-
-**Question**
-How should hydrological positions be sampled inside a single watershed?
-
-**Parameter setting**
-
-```R
-filter_expr   = "watershed_major == <WATERSHED_ID>"
-target_col    = "hydro_stratum"
-rank_cols     = c("hydro_dist_to_center")
-n_per_target  = 3
-d_min_m       = 500
-```
-
-**Interpretation**
-
-* Selection is restricted to one watershed.
-* Hydrological domains define representation.
-* Typical drainage positions are preferred.
-* Spatial spacing ensures internal coverage.
-
-
-
-## Why Forest Filtering and LUCC Are Not Redundant
-
-Forest filtering answers a binary question:
-
-> Is this segment forest or not?
-
-LUCC strata answer a typological question:
-
-> Which land-use composition type does this segment represent?
-
-Forest filtering defines admissibility.
-LUCC defines representation.
-
-They operate on different semantic levels and can be combined or used independently.
-
-
-
-## What the Outputs Represent
-
-Each setting produces:
-
-* a polygon layer of selected segments,
-* a point layer of candidate locations inside those segments.
-
-These layers encode a spatial interpretation of the analytical question, not just a technical result.
-
-
-
-## Core Idea
-
-The selector formalizes spatial intent:
-
-* restrict the spatial domain,
-* ensure coverage of relevant landscape situations,
-* enforce spatial independence.
-
-This keeps spatial decisions transparent, reproducible, and adaptable across studies.
+Important decision:
+- in the selector, default is `mcda_norm_scope="filtered"` so the score is meaningful within the allowed design space.
+
+## Typical scenario runs (with parameter settings)
+
+### Scenario A: Forest-only, cover physio strata, transparent ranking
+- `filter_expr = "cov_forest >= 0.8"`
+- `target_col = "physio_stratum"`
+- `n_per_target = 3`
+- `rank_mode = "lex"`
+- `rank_cols = c("physio_dist_to_center")`
+- `d_min_m = 500`
+
+Interpretation:
+- “Within forest, pick 3 best representatives per physio stratum and keep them spaced.”
+
+### Scenario B: Land-use coverage first, then physio
+- `filter_expr = ""`
+- `target_col = "cov_stratum"`
+- `n_per_target = 3`
+- `rank_mode = "lex"`
+- `rank_cols = c("cov_dist_to_center","physio_dist_to_center")`
+- `d_min_m = 500`
+
+Interpretation:
+- “Ensure land-use coverage, then improve physio representativeness as tie-break.”
+
+### Scenario C: Forest-only, cover physio strata, multi-criteria internal scoring
+- `filter_expr = "cov_forest >= 0.8"`
+- `target_col = "physio_stratum"`
+- `n_per_target = 3`
+- `rank_mode = "mcda"`
+- `mcda_dist_cols = c("physio_dist_to_center","it_dist_to_center","hydro_dist_to_center","bio_dist_to_center","cov_dist_to_center")`
+- `mcda_weights = c(physio_dist_to_center=1.0, it_dist_to_center=0.5, hydro_dist_to_center=1.0, bio_dist_to_center=0.5, cov_dist_to_center=1.0)`
+- `mcda_norm_scope = "filtered"`
+- `d_min_m = 500`
+
+Interpretation:
+- “Still cover physio strata, but rank within each stratum by a balanced multi-domain score.”
+
+## Practical notes (what to expect)
+
+- MCDA baseline can select clusters of segments in one region — it has no spacing constraint.
+- Selector can lose some coverage after thinning if spacing is strict. If that happens, you either:
+  - reduce `d_min_m`, or
+  - increase candidate pool per stratum before thinning (design choice), or
+  - run a second pass for missing strata (explicit policy).
+
+## Next step: S6 validation
+
+After running scenarios, S6 evaluates:
+- coverage completeness per target
+- achieved spacing distribution
+- overlap with MCDA baseline
+- per-domain representativeness summaries
+
+The goal is not “one best” output; it is to make trade-offs explicit and reproducible.
