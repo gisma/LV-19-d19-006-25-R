@@ -77,6 +77,11 @@ S2_features	classification_mlc	classification	tif
 S2_features	classification_rf_model	classification	rds
 S2_features	classification_rf_confusion	classification	rds
 
+S2_features	s2_lc_rf_2021	classification	tif
+S2_features	s2_lc_rf_prob_2021	classification	tif
+S2_features	s2_lc_rf_model_2021	classification	rds
+S2_features	s2_lc_rf_cv_metrics_2021	classification	csv
+S2_features	s2_lc_rf_trainpts_2021	classification	gpkg
 # --- S2 remote sensing (add) ---
 
 S2_features	s2_gdalcubes_cube_2018_2022_all	remote_sensing	nc

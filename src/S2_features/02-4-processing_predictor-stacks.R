@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 ############################################################
-# Script:   02-4-processing_predictor-stacks.R
+# Script:   02-5-processing_predictor-stacks.R
 # Project:  Burgwald
 #
 # Purpose
@@ -27,7 +27,8 @@
 # - IO exclusively via `paths[...]`.
 # - Deterministic grid alignment.
 # - Categorical layers are NOT reduced.
-# - Training points are derived from CLC + RF stack only (no S3 semantics).
+# - Training points derived from *static valid mask* (CLC + predictors),
+#   balanced by CLC class without per-class raster masks.
 ############################################################
 
 suppressPackageStartupMessages({
@@ -255,13 +256,12 @@ run_if_missing(out_file, {
 
 ## -------------------------------------------------------------------
 ## 6) S2 product: RF training points (CLC labels + RF predictor values)
+##     FAST balanced sampling via static valid mask + cell indices
 ## -------------------------------------------------------------------
 
 out_trainpts_gpkg <- paths[["s2_lc_rf_trainpts_2021"]]
 
 run_if_missing(out_trainpts_gpkg, {
-  
-  source(here::here("src", "r-libs", "helper.R"))
   
   # predictors = RF-ready stack product
   pred <- terra::rast(out_file)
@@ -275,7 +275,7 @@ run_if_missing(out_trainpts_gpkg, {
   clc <- terra::rast(clc_file)
   if (terra::nlyr(clc) != 1) stop("aoi_clc must be a single-layer categorical raster.")
   
-  # strict alignment to predictor grid (NEAR)
+  # align CLC strictly to predictor grid (NEAR)
   clc <- align_to_template(clc, pred, method = "near")
   
   if (!terra::compareGeom(pred, clc, stopOnError = FALSE,
@@ -283,19 +283,77 @@ run_if_missing(out_trainpts_gpkg, {
     stop("CLC is not aligned to RF predictor stack (geom mismatch after alignment).")
   }
   
-  msg("Sampling RF training points from CLC (stratified) ...")
+  ## ---- static valid mask: CLC not NA + all predictors finite (once) ----
+  msg("Building static valid mask (CLC + predictors) ...")
   
-  pts_sf <- sample_training_points_from_clc(
-    clc                = clc,
-    n_per_class        = 500L,
-    aoi                = NULL,
-    predictors         = pred,
-    min_dist_m         = NULL,
-    seed               = as.integer(seed),
-    drop_na_predictors = TRUE
-  )
+  ok_pred <- terra::app(pred, \(...) as.integer(all(is.finite(c(...)))))
+  ok      <- (ok_pred == 1) & !is.na(clc)
   
-  if (nrow(pts_sf) == 0) stop("Training point sampling returned 0 points.")
+  cells_ok <- terra::which(ok, cells = TRUE)
+  if (length(cells_ok) == 0) stop("Valid mask has zero cells (ok-mask empty).")
+  
+  ## ---- read class labels for ok-cells (vectorised) -----------------------
+  clc_vals <- terra::values(clc, cells_ok, mat = FALSE)
+  ok_finite <- is.finite(clc_vals)
+  cells_ok  <- cells_ok[ok_finite]
+  clc_vals  <- clc_vals[ok_finite]
+  
+  if (length(cells_ok) == 0) stop("After filtering non-finite CLC labels, no valid cells remain.")
+  
+  classes <- sort(unique(as.integer(clc_vals)))
+  if (length(classes) == 0) stop("No classes found in valid mask.")
+  
+  msg("Valid classes in AOI mask: ", length(classes))
+  
+  ## ---- balanced sampling by class via indices (no raster masks) ----------
+  set.seed(as.integer(seed))
+  
+  n_per_class <- 500L  # balanced target per class
+  idx_by_class <- split(seq_along(clc_vals), clc_vals)
+  
+  sampled_cells <- integer(0)
+  sampled_class <- integer(0)
+  
+  for (cls in names(idx_by_class)) {
+    idx <- idx_by_class[[cls]]
+    if (length(idx) == 0) next
+    
+    take <- min(as.integer(n_per_class), length(idx))
+    pick <- sample(idx, size = take, replace = FALSE)
+    
+    sampled_cells <- c(sampled_cells, cells_ok[pick])
+    sampled_class <- c(sampled_class, rep.int(as.integer(cls), take))
+  }
+  
+  if (length(sampled_cells) == 0) {
+    stop("Balanced sampling returned zero points (no class had any available cells).")
+  }
+  
+  msg(sprintf("Sampled points: %d (target ~ %d)", length(sampled_cells), length(classes) * n_per_class))
+  
+  ## ---- build points from sampled cells -----------------------------------
+  xy <- terra::xyFromCell(pred, sampled_cells)
+  pts <- terra::vect(as.data.frame(xy), geom = c("x", "y"), crs = terra::crs(pred))
+  pts$class <- sampled_class
+  
+  ## ---- extract predictors once (fast) ------------------------------------
+  x <- terra::extract(pred, pts)
+  x <- x[, -1, drop = FALSE]  # drop ID
+  
+  train_df <- data.frame(class = pts$class, x, check.names = FALSE)
+  
+  # drop rows with any NA/NaN/Inf predictors
+  ok_row <- stats::complete.cases(train_df) & is.finite(train_df$class)
+  train_df <- train_df[ok_row, , drop = FALSE]
+  pts      <- pts[ok_row]
+  
+  if (nrow(train_df) == 0) stop("Training table empty after predictor NA filtering (unexpected).")
+  
+  # attach predictor columns to points
+  for (nm in names(train_df)[-1]) pts[[nm]] <- train_df[[nm]]
+  
+  ## ---- write GPKG ---------------------------------------------------------
+  pts_sf <- sf::st_as_sf(pts)
   
   dir.create(dirname(out_trainpts_gpkg), recursive = TRUE, showWarnings = FALSE)
   sf::st_write(pts_sf, out_trainpts_gpkg, delete_dsn = TRUE, quiet = TRUE)

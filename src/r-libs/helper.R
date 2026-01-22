@@ -23,10 +23,6 @@
 #' @return An `sf` POINT object with columns:
 #'         - `class` (integer class code from CLC)
 #'         - optionally predictor columns (if `predictors` is given)
-#'
-#' @examples
-#' # pts <- sample_training_points_from_clc(clc, n_per_class = 200, aoi = aoi_sf)
-#' # pts <- sample_training_points_from_clc(clc, 200, aoi_sf, predictors = s2_stack_10m)
 sample_training_points_from_clc <- function(clc,
                                             n_per_class,
                                             classes = NULL,
@@ -84,8 +80,12 @@ sample_training_points_from_clc <- function(clc,
     pts_list[[k]] <- p
   }
   
+  # ---- FIX: robust combine (avoid rbind() with no args) ----------------------
+  pts_list <- Filter(Negate(is.null), pts_list)
+  if (length(pts_list) == 0) stop("Sampling returned zero points (no class produced any samples).")
   pts_v <- do.call(rbind, pts_list)
   if (is.null(pts_v) || terra::nrow(pts_v) == 0) stop("Sampling returned zero points.")
+  # ---------------------------------------------------------------------------
   
   # optional thinning by minimum distance (greedy; approximate)
   if (!is.null(min_dist_m)) {
