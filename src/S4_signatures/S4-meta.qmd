@@ -1,0 +1,142 @@
+---
+title: "S4 meta — Deterministic signatures and attribute space"
+format:
+  html:
+    toc: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# S4: Deterministic signatures and attribute space  
+Burgwald decision stack: meta-level description
+
+
+![](images/s4.drawio.svg){fig-align="center"}
+
+## Conceptual position of S4
+
+S4 denotes the layer in which fixed spatial structures (segments from S3) are
+transformed into a deterministic attribute space. The unit of computation is the
+segment. All quantities in S4 are attached to segment geometry and indexed by a
+stable segment identifier.
+
+S4 introduces no new spatial structure and no semantic interpretation. It
+performs explicit, reproducible aggregation of upstream products in order to
+create segment-level descriptors (“signatures”). These signatures remain purely
+descriptive and preserve traceability to their originating measurements and
+transformations.
+
+S4 addresses a specific question:
+
+> Which properties of a fixed spatial structure can be derived deterministically
+> and represented as a stable attribute space, prior to any learning, selection,
+> or decision logic?
+
+This restriction is intentional. S4 prepares representations but does not
+interpret them.
+
+---
+
+## Boundary conditions: what S4 explicitly excludes
+
+S4 does not contain raster products or pixel-based predictors (S2).  
+It does not create or modify spatial partitions (S3).  
+It does not perform representation learning, embedding, or latent modelling
+(S4L).  
+It does not perform ranking, optimisation, or decision logic (S5).
+
+Any operation that introduces preferences, thresholds motivated by objectives,
+candidate selection, or trade-off reasoning is outside the S4 domain.
+
+---
+
+## Functional role of S4 in the decision stack
+
+S4 fulfils three complementary functions.
+
+First, it provides a stable attribute space. Segment geometry from S3 becomes the
+carrier of quantitative descriptors that can be used consistently across
+downstream workflows.
+
+Second, it externalises aggregation logic. Instead of implicit neighbourhoods or
+ad-hoc summaries, aggregation is expressed explicitly as zonal extraction and
+joins, making scale and support effects visible and reproducible.
+
+Third, it enables modular composition of representations. Independent signature
+families can be generated and combined without coupling their semantics or
+execution order.
+
+In the Burgwald implementation, the main S4 artefact is a unified attribute stack
+attached to segment geometry.
+
+---
+
+## Design principles for S4 processing
+
+All S4 products follow strict constraints.
+
+Inputs and outputs are registry-defined. No paths, layers, or intermediate
+artefacts are hard-coded.
+
+Geometry is inherited exclusively from S3. Segment identifiers are persistent
+and form the primary key for all joins and validations.
+
+Transformations are explicit and deterministic. Aggregation operators, joins,
+and derived quantities are declared in code and produce identical results under
+re-execution.
+
+S4 remains descriptive. Any discretisation or encoding is treated as a
+representational variant, not as a semantic or decision step.
+
+---
+
+## Product families in the Burgwald context
+
+Information-theoretic and landscape metrics derive structural descriptors of
+composition and configuration at segment level.
+
+Physiographic metrics derive segment attributes from terrain-related predictors
+(elevation and derivative fields).
+
+Hydrological metrics derive segment attributes from flow-related and network
+products.
+
+Cover metrics derive per-class fractions and composition descriptors from
+categorical layers.
+
+Biostructural metrics derive segment attributes from canopy and structure
+rasters via zonal extraction.
+
+An integration step joins all partial signature layers into a single attribute
+stack attached to the segment geometry. Optional transparent discretisations may
+be generated strictly as parallel representations.
+
+All products remain keyed by the same segment identifiers and retain direct
+traceability to upstream layers.
+
+---
+
+## Semantic versus organisational ordering
+
+The semantic classification of S4 is independent of execution order. A workflow
+remains part of S4 as long as it produces deterministic, segment-level
+descriptors without introducing learning or decision logic.
+
+Conversely, any workflow that transforms these descriptors into latent
+representations, embeddings, rankings, or selections leaves S4 by definition,
+regardless of its position in the processing pipeline.
+
+Maintaining this distinction prevents entanglement of representation,
+structure, and decision semantics.
+
+---
+
+## Contract statement
+
+S4 comprises deterministic, auditable signatures attached to fixed spatial
+structures. It transforms S3 segments into a stable attribute space via explicit
+aggregation and joins, without introducing learning, semantics, or decision
+logic. These representations form the quantitative basis for all subsequent
+modelling and decision layers.

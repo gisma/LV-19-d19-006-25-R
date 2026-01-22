@@ -40,6 +40,7 @@ S2_features	s2_pred_stack_2019	remote_sensing	tif
 S2_features	s2_pred_stack_2020	remote_sensing	tif
 S2_features	s2_pred_stack_2021	remote_sensing	tif
 S2_features	s2_pred_stack_2022	remote_sensing	tif
+S2_features	s2_pred_stack_2021_rf	features	tif
 
 # =========================================================
 # ADDITIONS (merge) — missing items from your new list

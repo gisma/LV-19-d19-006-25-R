@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<mxfile host="app.diagrams.net" modified="2026-01-22T00:00:00.000Z" agent="ChatGPT" version="29.3.2" type="device">
+  <diagram id="S3meta" name="S3-meta">
+    <mxGraphModel dx="2876" dy="3431" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="s1" parent="1" value="S1 • Input data&amp;#xa;DEM, Sentinel-Classification/Land cover, Forest fraction, CHM (optional)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=3;fillColor=#BFC6EE;strokeColor=#3D7ECF;align=center;verticalAlign=middle;fontStyle=1;" vertex="1">
+          <mxGeometry x="120" y="30" width="610" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg_bg" parent="1" value="" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;opacity=35;" vertex="1">
+          <mxGeometry x="120" y="130" width="610" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg_title" parent="1" value="S2 → S3 • Segmentation as unit discovery&amp;#xa;Which spatial units are stable across scales?" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;align=center;verticalAlign=middle;fontStyle=1;" vertex="1">
+          <mxGeometry x="160" y="155" width="530" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg1" parent="1" value="Multi-scale segmentation&amp;#xa;parameter sweep (method × features × scale)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="200" y="230" width="450" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg2" parent="1" value="Candidate segmentations&amp;#xa;(multiple scales / parameter sets)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="200" y="290" width="450" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg3" parent="1" value="Scale evaluation&amp;#xa;coherence, stability, interpretability" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="200" y="350" width="450" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg4" parent="1" value="Fix segmentation configuration&amp;#xa;(chosen method/scale/features)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="200" y="410" width="450" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="seg5" parent="1" value="Continuous segmentation map&amp;#xa;primary spatial analysis units" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0C8B0;strokeColor=#288058;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="200" y="470" width="450" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3_bg" parent="1" value="S3 • Segmentation products (structural units)&amp;#xa;Stable geometry + persistent IDs; no semantics" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=3;fillColor=#A0B8D8;strokeColor=#2868B0;" vertex="1">
+          <mxGeometry x="120" y="520" width="610" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3_1" parent="1" value="Technical feature space&amp;#xa;z-score stack → PCA features (OTB)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0B8D8;strokeColor=#2868B0;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="170" y="585" width="510" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3_2" parent="1" value="Stability screening&amp;#xa;ARI_prev under local perturbations" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0B8D8;strokeColor=#2868B0;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="170" y="635" width="510" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3_3" parent="1" value="Postcondition enforcement&amp;#xa;size-knee cutoff → mask micro-fragments" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0B8D8;strokeColor=#2868B0;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="170" y="685" width="510" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3_4" parent="1" value="Geometry finalisation&amp;#xa;polygonise, validate, AOI clip, dissolve by segment_id" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0B8D8;strokeColor=#2868B0;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="170" y="735" width="510" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3_5" parent="1" value="Structural use as scaffold&amp;#xa;grouped spatial CV by segment_id (CAST); optional GT propagation" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#A0B8D8;strokeColor=#2868B0;align=center;verticalAlign=middle;" vertex="1">
+          <mxGeometry x="170" y="785" width="510" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3s4_bg" parent="1" value="S3 → S4 • Physiographic strata + HRU/EFU&amp;#xa;(downstream, not defined here)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=3;fillColor=#E0A0A0;strokeColor=#C03030;opacity=50;" vertex="1">
+          <mxGeometry x="120" y="810" width="610" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="s4_bg" parent="1" value="S4 • Network optimisation + hydrology&amp;#xa;(downstream)" style="rounded=1;whiteSpace=wrap;html=1;strokeWidth=3;fillColor=#D8D0F0;strokeColor=#6840C0;opacity=45;" vertex="1">
+          <mxGeometry x="180" y="995" width="490" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_s1_seg" parent="1" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#288058;" edge="1" source="s1" target="seg_title">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_seg_s3" parent="1" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#2868B0;" edge="1" source="seg5" target="s3_bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

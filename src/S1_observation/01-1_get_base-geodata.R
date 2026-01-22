@@ -21,7 +21,7 @@ dem_out_file <- paths[["aoi_dgm"]]
 
 run_if_missing(dem_out_file, {
   
-  today <- format(Sys.Date() - 1, "%Y%m%d")
+  today <- format(Sys.Date() , "%Y%m%d")
   
   base_url_wf_dgm <- paste0(
     "https://gds.hessen.de/downloadcenter/", today,
@@ -34,7 +34,10 @@ run_if_missing(dem_out_file, {
   )
   
   dgm1_urls <- c(
-    burgwald     = paste0(base_url_wf_dgm, "Burgwald%20-%20DGM1.zip"),
+    allendorf    = paste0(base_url_wf_dgm, "Allendorf%20(Eder)%20-%20DGM1.zip"),
+    kirchhain    =  paste0(base_url_mr_dgm, "Kirchhain%20-%20DGM1.zip"),
+    frankenberg   = paste0(base_url_wf_dgm, "Frankenberg%20(Eder)%20-%20DGM1.zip"),
+     burgwald     = paste0(base_url_wf_dgm, "Burgwald%20-%20DGM1.zip"),
     gemuenden    = paste0(base_url_wf_dgm, "Gem%C3%BCnden%20(Wohra)%20-%20DGM1.zip"),
     rosenthal    = paste0(base_url_wf_dgm, "Rosenthal%20-%20DGM1.zip"),
     muenchhausen = paste0(base_url_mr_dgm, "M%C3%BCnchhausen%20-%20DGM1.zip"),
@@ -98,7 +101,7 @@ dom_out_file <- paths[["aoi_dom"]]
 
 run_if_missing(dom_out_file, {
   
-  today <- format(Sys.Date() - 1, "%Y%m%d")
+  today <- format(Sys.Date() , "%Y%m%d")
   
   base_url_wf_dom <- paste0(
     "https://gds.hessen.de/downloadcenter/", today,
@@ -111,6 +114,9 @@ run_if_missing(dom_out_file, {
   )
   
   dom1_urls <- c(
+    allendorf    = paste0(base_url_wf_dom, "Allendorf%20(Eder)%20-%20DOM1.zip"),
+    kirchhain    =  paste0(base_url_mr_dom, "Kirchhain%20-%20DOM1.zip"),
+    frankenberg   = paste0(base_url_wf_dom, "Frankenberg%20(Eder)%20-%20DOM1.zip"),
     burgwald     = paste0(base_url_wf_dom, "Burgwald%20-%20DOM1.zip"),
     gemuenden    = paste0(base_url_wf_dom, "Gem%C3%BCnden%20(Wohra)%20-%20DOM1.zip"),
     rosenthal    = paste0(base_url_wf_dom, "Rosenthal%20-%20DOM1.zip"),

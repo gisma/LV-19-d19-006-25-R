@@ -1,0 +1,143 @@
+---
+title: "S3 meta — Segmentation and structural spatial units"
+format:
+  html:
+    toc: true
+    code-fold: false
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+# S3: Segmentation and structural spatial units  
+Burgwald decision stack: meta-level description
+
+![](îmages/s3.drawio.svg){fig-align="center"}
+
+## Conceptual position of S3
+
+S3 denotes the layer in which spatially explicit raster information is
+transformed into discrete spatial units. These units are not semantic objects
+in the domain sense, but operational structural entities that define coherent
+spatial supports for subsequent aggregation, attribution, and decision logic.
+
+S3 introduces explicit spatial partitioning. Continuous pixel fields are
+converted into labelled regions that are internally homogeneous with respect
+to a selected feature space. The segmentation itself is treated as a structural
+representation, not as an interpretation of physical or ecological objects.
+
+S3 addresses the following question:
+
+> How can continuous spatial variability be partitioned into reproducible,
+> spatially coherent units that serve as stable carriers for further analysis?
+
+This layer formalises spatial structure without assigning meaning.
+
+---
+
+## Boundary conditions: what S3 explicitly excludes
+
+S3 does not contain derived physical predictors, classifications, or
+observational summaries. These belong to S2. It does not contain semantic
+descriptors, signatures, or aggregated metrics; these belong to S4. It does not
+contain learned representations or embeddings, which are assigned to S4L. It
+does not contain ranking, optimisation, or decision logic, which belong to S5.
+
+S3 units are not assumed to correspond to real-world entities such as stands,
+patches, or management units. Any such interpretation is intentionally deferred
+to higher layers.
+
+Whenever a product assigns semantic meaning, aggregates attributes, or supports
+explicit decisions, it has left the S3 domain.
+
+---
+
+## Functional role of S3 in the decision stack
+
+S3 fulfils three structural functions.
+
+First, it provides a stable spatial support for aggregation. Many quantities of
+interest cannot be meaningfully interpreted at the pixel scale alone. S3 units
+define spatial containers over which deterministic signatures and statistics
+can later be computed without introducing arbitrary neighbourhood definitions.
+
+Second, S3 externalises spatial boundary formation. Instead of relying on
+implicit human delineation or ad-hoc buffering, spatial coherence is defined by
+an explicit, reproducible segmentation process. This reduces subjective bias
+and improves auditability.
+
+Third, S3 provides a geometric scaffold for auxiliary processes. Segments may be
+used as annotation infrastructure, for example to stabilise training region
+delineation for pixel-based models. In this role, segments carry geometry but no
+semantics.
+
+In the Burgwald implementation, segments are also used as *grouping units* to
+control spatial leakage in model assessment (e.g. spatial CV folds grouped by
+segment_id). This is a methodological control use of structure, not a semantic
+interpretation of the segments.
+
+---
+
+## Construction principles
+
+S3 segmentation is derived exclusively from S2 feature layers. The segmentation
+algorithm operates in a transformed feature s![](images/s2.drawio.svg){fig-align="center"}pace to reduce redundancy and
+improve numerical stability. Dimensionality reduction and standardisation are
+treated as technical preprocessing steps, not as semantic modelling.
+
+Segmentation parameters are not interpreted as physical process scales. Instead,
+parameter selection is treated as an operational control problem and evaluated
+via stability under controlled perturbations. Robustness is prioritised over
+interpretability of individual parameters.
+
+Post-conditions are applied explicitly to enforce structural constraints on the
+resulting segmentation, such as minimum region size and topological consistency.
+These constraints are pragmatic and do not imply physical meaning.
+
+The final product of S3 is a polygon layer with stable segment identifiers and
+validated geometries.
+
+---
+
+## Product characteristics in the Burgwald context
+
+In Burgwald, segmentation is constructed from a canonical S2 predictor stack via
+explicit technical steps:
+
+- z-score standardisation of the multi-band stack,
+- PCA feature extraction to obtain a compact, de-correlated feature space,
+- multi-scale MeanShift segmentation, screened by local perturbation stability
+  using ARI_prev,
+- explicit postcondition enforcement via size-regime filtering (knee/jump logic)
+  to suppress unstable micro-fragments,
+- polygonisation after masking, geometry validation, AOI clipping, and
+  enforcement of one geometry per segment_id.
+
+The resulting S3 product is a reproducible structural partition (GPKG) with a
+persistent segment_id field. Segments are used downstream purely as spatial
+supports and control units (aggregation carriers and CV grouping), without
+semantic commitments.
+
+---
+
+## Semantic versus organisational ordering
+
+S3 defines a semantic layer of structural representation, not a strict temporal
+stage in the processing pipeline. Some downstream products may depend on S3 for
+practical reasons, while some S2 products may operationally be executed after S3
+without changing their semantic classification.
+
+The defining criterion is whether a product represents a spatial partition
+structure rather than a derived measurement or a semantic descriptor.
+
+Maintaining this distinction prevents circular reasoning between structure,
+representation, and decision logic.
+
+---
+
+## Contract statement
+
+S3 comprises the explicit spatial partitioning of continuous spatial data into
+reproducible structural units. These units provide stable spatial support for
+aggregation, attribution, and downstream modelling, without carrying inherent
+semantic meaning or decision logic.

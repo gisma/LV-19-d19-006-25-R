@@ -6,60 +6,43 @@
 #
 # PURPOSE
 # -------
-# Pixel-wise landcover classification (S2 output) using a Random Forest (RF),
-# trained from point-based ground truth (GT) that is *propagated to segments*
-# (S3) to obtain high-quality training masks.
+# Pixel-wise landcover classification (S2 output) using Random Forest (RF),
+# trained from a persisted S2 training product:
 #
-# Key idea (your design):
-# - You want a pixel model (S2 classes), but you want segments as an annotation
-#   carrier to speed up training data creation and improve boundary quality.
-# - Segments are NOT the prediction object; they are only used to define
-#   where GT labels are trusted (label propagation / weak supervision).
+#   paths[["s2_lc_rf_trainpts_2021"]]  (GPKG; class + predictor columns)
 #
-# CAST alignment:
-# - We use spatial cross-validation folds (CAST) to avoid overly optimistic
-#   performance due to spatial autocorrelation and leakage.
-# - Crucially: folds are created on the *segment level* (or spatial blocks),
-#   so pixels from the same segment cannot end up in train and test at once.
+# ARCHITECTURE NOTE
+# -----------------
+# - Predictors are consumed as one canonical S2 product: s2_pred_stack_2021_rf
+# - Training points are generated in S2 by 02-5-processing_predictor-stacks.R
+# - This script performs model training, spatial CV (CAST), and prediction.
+#
+# CAST ALIGNMENT
+# --------------
+# Spatial CV folds are grouped by segment_id to reduce spatial leakage.
 #
 # INPUTS (canonical via paths[])
 # -----------------------------
-# - Predictor raster stack (S2 features):
-#     paths[["s2_pred_stack_2021"]]   (multi-band GeoTIFF; 10 m)
+# Predictors (RF-ready stack produced in S2):
+#   paths[["s2_pred_stack_2021_rf"]]
 #
-# - Segmentation polygons (S3):
-#     paths[["layer0_segments"]]      (GPKG; segment_id + geometry)
+# Training points (S2; persisted):
+#   paths[["s2_lc_rf_trainpts_2021"]]
 #
-# - Ground truth points (S1 labels):
-#     paths[["gt_points_lc"]]         (GPKG; class + geometry)
-#   Required attribute columns in GT:
-#     - class  (factor or character; categorical land-cover class label
-#               used as training target, e.g. "deciduous", "mixed",
-#               "coniferous", "grassland", "cropland")
-# OUTPUTS (define in outputs.tsv and map to paths[])
-# -------------------------------------------------
-# - Pixel class map (S2 label raster):
-#     paths[["s2_lc_rf_2021"]]
+# Segmentation polygons (S3; only for CAST grouping by segment_id):
+#   paths[["layer0_segments"]]
 #
-# - Optional: class probability stack (S2):
-#     paths[["s2_lc_rf_prob_2021"]]
+# OUTPUTS (must exist in outputs.tsv / paths[])
+# ---------------------------------------------
+# Pixel class map (S2):
+#   paths[["s2_lc_rf_2021"]]
 #
-# - Model report (csv/rds):
-#     paths[["s2_lc_rf_model_2021"]]
-#     paths[["s2_lc_rf_cv_metrics_2021"]]
+# Pixel probability stack (S2):
+#   paths[["s2_lc_rf_prob_2021"]]
 #
-# NOTES
-# -----
-# - This script is written as an operational, reproducible control script
-#   in the CAST spirit (caret + spatial CV folds).
-# - It does NOT introduce new abstractions; everything is explicit.
-#
-# REFERENCES
-# ----------
-# CAST package introduction and spatial CV concept:
-#   https://cran.r-project.org/web/packages/CAST/vignettes/cast01-CAST-intro.html
-# CreateSpacetimeFolds documentation (used here for spatial folds):
-#   https://www.rdocumentation.org/packages/CAST/topics/CreateSpacetimeFolds
+# Model artefacts:
+#   paths[["s2_lc_rf_model_2021"]]
+#   paths[["s2_lc_rf_cv_metrics_2021"]]
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -78,14 +61,16 @@ source(here::here("src", "_core", "01-setup-burgwald.R"))
 # -----------------------------------------------------------------------------
 # 0) Strict IO (paths[] only)
 # -----------------------------------------------------------------------------
-pred_stack_file <- paths[["s2_pred_stack_2021"]]
-seg_file        <- paths[["layer0_segments"]]
-gt_file         <- paths[["gt_points_lc"]]
+
+pred_stack_file  <- paths[["s2_pred_stack_2021_rf"]]
+train_pts_file   <- paths[["s2_lc_rf_trainpts_2021"]]
+seg_file         <- paths[["layer0_segments"]]
 
 stopifnot(file.exists(pred_stack_file))
+stopifnot(file.exists(train_pts_file))
 stopifnot(file.exists(seg_file))
-stopifnot(file.exists(gt_file))
 
+# Outputs
 out_class_file  <- paths[["s2_lc_rf_2021"]]
 out_prob_file   <- paths[["s2_lc_rf_prob_2021"]]
 out_model_rds   <- paths[["s2_lc_rf_model_2021"]]
@@ -99,174 +84,100 @@ dir.create(dirname(out_cv_csv),     recursive = TRUE, showWarnings = FALSE)
 # -----------------------------------------------------------------------------
 # 1) Parameters (explicit)
 # -----------------------------------------------------------------------------
+
 set.seed(1)
 
-# Vegetation threshold (if you later want rules using CHM; kept explicit)
-veg_thr_m <- 2.0
-
-# Segment-label propagation rules:
-# - min_points_per_segment: discard segments with too few GT points
-# - purity_thr: require dominant class fraction >= purity_thr
-min_points_per_segment <- 2L
-purity_thr             <- 0.70
-
-# Pixel sampling design:
-# - max_pixels_per_segment: limit to avoid huge segments dominating
-# - class_balance: if TRUE, downsample per class after extraction
-max_pixels_per_segment <- 400L
-class_balance          <- TRUE
-target_n_per_class     <- 20000L
-
-# Spatial CV design (CAST):
-# - k folds
-# - spacevar: we use a spatial grouping variable (segment_id or spatial blocks)
+# Spatial CV design (CAST)
 k_folds <- 5L
 
-# Random Forest tuning grid (ranger via caret):
-# - mtry tuned; splitrule fixed; min.node.size tuned
-# You can extend this grid if you want more exhaustive tuning.
-rf_grid <- expand.grid(
-  mtry          = c(2, 4, 6, 8),          # adapt to number of predictors
-  splitrule     = "gini",
-  min.node.size = c(1, 5, 10)
-)
+# ranger tuning constants (mtry is derived from p later, see section 3)
+rf_splitrule_vals     <- "gini"
+rf_min_node_size_vals <- c(1, 5, 10)
 
 # -----------------------------------------------------------------------------
-# 2) Load data
+# 3) Load data + derive canonical RF tuning grid from predictor stack
 # -----------------------------------------------------------------------------
-pred_stack <- terra::rast(pred_stack_file)         # 10 m predictors
-segments   <- sf::st_read(seg_file, quiet = TRUE) # S3 polygons
-gt_points  <- sf::st_read(gt_file, quiet = TRUE)  # S1 points with class
 
+pred_stack <- terra::rast(pred_stack_file)
+segments   <- sf::st_read(seg_file, quiet = TRUE)
 stopifnot("segment_id" %in% names(segments))
-stopifnot("class"      %in% names(gt_points))
 
-# Harmonize CRS
-if (sf::st_crs(gt_points)$wkt != sf::st_crs(segments)$wkt) {
-  gt_points <- sf::st_transform(gt_points, sf::st_crs(segments))
+if (any(!sf::st_is_valid(segments))) segments <- sf::st_make_valid(segments)
+
+pred_names <- names(pred_stack)
+
+p <- terra::nlyr(pred_stack)
+stopifnot(is.finite(p) && p >= 2)
+
+mtry_raw <- unique(as.integer(round(c(
+  sqrt(p),
+  p / 3,
+  0.10 * p,
+  0.20 * p,
+  0.30 * p,
+  0.50 * p,
+  0.70 * p
+))))
+mtry_vals <- sort(unique(mtry_raw[mtry_raw >= 1 & mtry_raw <= p]))
+if (length(mtry_vals) < 3) {
+  mtry_vals <- sort(unique(pmax(1L, pmin(p, as.integer(c(1, floor(p / 2), p))))))
 }
 
-# Optional: ensure valid geometries
-if (any(!sf::st_is_valid(segments)))  segments  <- sf::st_make_valid(segments)
-if (any(!sf::st_is_valid(gt_points))) gt_points <- sf::st_make_valid(gt_points)
+rf_grid <- expand.grid(
+  mtry          = mtry_vals,
+  splitrule     = rf_splitrule_vals,
+  min.node.size = rf_min_node_size_vals
+)
+
+message("Predictor bands (p): ", p)
+message("Derived mtry grid: ", paste(mtry_vals, collapse = ", "))
 
 # -----------------------------------------------------------------------------
-# 3) Point-in-polygon: assign GT points to segments (segment_id)
+# 4) Load persisted S2 training points, attach segment_id (CAST grouping)
 # -----------------------------------------------------------------------------
-# This is the key step: points define labels; segments define trusted areas.
-gt_join <- sf::st_join(
-  gt_points,
+
+train_pts <- sf::st_read(train_pts_file, quiet = TRUE)
+if (nrow(train_pts) == 0) stop("Training point file is empty: ", train_pts_file)
+if (!("class" %in% names(train_pts))) stop("Training point file has no 'class' column: ", train_pts_file)
+
+# predictor columns must exist in training points
+missing <- setdiff(pred_names, names(train_pts))
+if (length(missing) > 0) {
+  stop("Training points missing predictor columns: ", paste(missing, collapse = ", "))
+}
+
+# CRS align for join
+if (sf::st_crs(train_pts)$wkt != sf::st_crs(segments)$wkt) {
+  train_pts <- sf::st_transform(train_pts, sf::st_crs(segments))
+}
+if (any(!sf::st_is_valid(train_pts))) train_pts <- sf::st_make_valid(train_pts)
+
+# attach segment_id for CAST fold grouping
+train_pts_join <- sf::st_join(
+  train_pts,
   segments[, c("segment_id")],
   join = sf::st_within,
   left = FALSE
 )
-
-if (nrow(gt_join) == 0) {
-  stop("No GT points fall within segments. Check CRS/alignment or GT coverage.")
+if (nrow(train_pts_join) == 0) {
+  stop("No training points fall within segments. Check CRS / alignment / coverage.")
 }
 
-# -----------------------------------------------------------------------------
-# 4) Propagate GT to segment labels (explicit rules)
-# -----------------------------------------------------------------------------
-# For each segment:
-#   - count points per class
-#   - determine dominant class + purity
-#   - accept label only if min_points and purity threshold satisfied
-seg_labels <- gt_join %>%
-  st_drop_geometry() %>%
+train_df <- train_pts_join %>%
+  sf::st_drop_geometry() %>%
   mutate(class = as.character(class)) %>%
-  count(segment_id, class, name = "n") %>%
-  group_by(segment_id) %>%
-  mutate(n_total = sum(n),
-         frac    = n / n_total) %>%
-  arrange(segment_id, desc(frac), desc(n)) %>%
-  slice(1) %>%
-  ungroup() %>%
-  mutate(
-    accept = (n_total >= min_points_per_segment) & (frac >= purity_thr)
-  )
-
-# Keep only accepted training segments
-train_segments <- seg_labels %>%
-  filter(accept) %>%
-  select(segment_id, class, n_total, frac)
-
-if (nrow(train_segments) == 0) {
-  stop("No segments passed GT propagation rules. Lower purity_thr or min_points_per_segment.")
-}
-
-# Attach labels to segment geometry (only training subset)
-train_pol <- segments %>%
-  inner_join(train_segments, by = "segment_id")
-
-# -----------------------------------------------------------------------------
-# 5) Pixel sampling from labelled segments (training data on pixel level)
-# -----------------------------------------------------------------------------
-# We sample pixel values from pred_stack inside each labelled segment polygon.
-# Important: training rows are pixels; target is the propagated segment class.
-
-# Convert sf polygons to terra vector for extraction
-train_vect <- terra::vect(train_pol)
-
-# Extract raster values for all pixels under training polygons
-# terra::extract returns a data.frame with polygon ID mapping.
-# We request cell=TRUE to later allow deduplication / balancing if needed.
-ext <- terra::extract(
-  pred_stack,
-  train_vect,
-  cells = TRUE
-)
-
-# ext includes an ID column mapping to polygons in train_vect
-# We map that back to segment_id + class.
-id_map <- train_pol %>%
-  mutate(.poly_id = seq_len(n())) %>%
-  st_drop_geometry() %>%
-  select(.poly_id, segment_id, class)
-
-ext <- ext %>%
-  as_tibble() %>%
-  rename(.poly_id = ID)
-
-# Join labels
-train_df <- ext %>%
-  inner_join(id_map, by = ".poly_id") %>%
-  select(segment_id, class, cell, everything(), -.poly_id)
-
-# Remove rows with NA predictors
-pred_names <- names(pred_stack)
-train_df <- train_df %>%
+  select(segment_id, class, all_of(pred_names)) %>%
   filter(if_all(all_of(pred_names), ~ is.finite(.x)))
 
-if (nrow(train_df) == 0) {
-  stop("Training extraction produced 0 valid pixel rows (all NA?).")
-}
-
-# Limit pixels per segment to avoid dominance by huge polygons
-train_df <- train_df %>%
-  group_by(segment_id) %>%
-  slice_sample(n = min(n(), max_pixels_per_segment)) %>%
-  ungroup()
-
-# Optional: class balancing (downsample to target_n_per_class)
-if (class_balance) {
-  train_df <- train_df %>%
-    group_by(class) %>%
-    slice_sample(n = min(n(), target_n_per_class)) %>%
-    ungroup()
-}
-
+if (nrow(train_df) == 0) stop("Training table empty after finite filtering.")
 train_df$class <- factor(train_df$class)
 
+message(sprintf("Training table loaded: n=%d  p=%d predictors", nrow(train_df), length(pred_names)))
+
 # -----------------------------------------------------------------------------
-# 6) Spatial CV folds (CAST) to avoid leakage
+# 5) Spatial CV folds (CAST)
 # -----------------------------------------------------------------------------
-# We must not split pixels randomly:
-# - pixels from the same segment are extremely correlated
-# - segments are spatially autocorrelated
-#
-# Here: use segment_id as the grouping variable for folds.
-# CAST's CreateSpacetimeFolds can create folds by group variables.
+
 folds <- CAST::CreateSpacetimeFolds(
   x        = train_df,
   spacevar = "segment_id",
@@ -276,7 +187,6 @@ folds <- CAST::CreateSpacetimeFolds(
   seed     = 1
 )
 
-# folds$index and folds$indexOut are directly usable in caret::trainControl
 ctrl <- caret::trainControl(
   method          = "cv",
   index           = folds$index,
@@ -288,9 +198,9 @@ ctrl <- caret::trainControl(
 )
 
 # -----------------------------------------------------------------------------
-# 7) Train RF (ranger) with caret + CAST folds
+# 6) Train RF (ranger) with caret + CAST folds
 # -----------------------------------------------------------------------------
-# Use ranger backend because it is fast and supports probability prediction.
+
 rf_fit <- caret::train(
   x          = train_df[, pred_names],
   y          = train_df$class,
@@ -298,13 +208,11 @@ rf_fit <- caret::train(
   trControl  = ctrl,
   tuneGrid   = rf_grid,
   importance = "impurity",
-  metric     = "ROC"  # multiClassSummary provides ROC as mean of one-vs-all AUCs
+  metric     = "ROC"
 )
 
-# Persist model object
 saveRDS(rf_fit, out_model_rds)
 
-# Save CV predictions + metrics summary
 cv_res <- rf_fit$results %>%
   as_tibble() %>%
   arrange(desc(ROC))
@@ -315,19 +223,13 @@ print(rf_fit)
 print(cv_res, n = Inf)
 
 # -----------------------------------------------------------------------------
-# 8) Predict pixel-wise class map (S2 output)
+# 7) Predict pixel-wise class probabilities and hard class map
 # -----------------------------------------------------------------------------
-# Predict class probabilities on the full predictor raster.
-# We do not use terra::predict(method="caret") because caret objects are not
-# always handled robustly; instead we use predict() and chunk manually.
 
-# Helper: chunked prediction to avoid memory blowups
 predict_raster_probs <- function(rast_stack, model, filename, overwrite = TRUE) {
-  # Prepare output
   levs <- levels(model$trainingData$.outcome)[[1]]
   ncls <- length(levs)
   
-  # Create empty SpatRaster with ncls layers
   out <- rast_stack[[1]]
   out <- terra::rast(out)
   out <- terra::setValues(out, NA_real_)
@@ -335,15 +237,11 @@ predict_raster_probs <- function(rast_stack, model, filename, overwrite = TRUE) 
   out <- out[[rep(1, ncls)]]
   names(out) <- paste0("p_", levs)
   
-  # Write in chunks
   bs <- terra::blockSize(rast_stack)
   out <- terra::writeStart(out, filename = filename, overwrite = overwrite)
   
   for (i in seq_len(bs$n)) {
     v <- terra::values(rast_stack, row = bs$row[i], nrows = bs$nrows[i], mat = TRUE)
-    
-    # v is matrix: (n_cells_in_block x n_predictors)
-    # Handle all-NA rows quickly
     ok <- apply(v, 1, function(x) all(is.finite(x)))
     
     pred_block <- matrix(NA_real_, nrow = nrow(v), ncol = ncls)
@@ -361,16 +259,13 @@ predict_raster_probs <- function(rast_stack, model, filename, overwrite = TRUE) 
   terra::rast(filename)
 }
 
-# 8.1 Probabilities
+# 7.1 Probabilities
 prob_r <- predict_raster_probs(pred_stack, rf_fit, out_prob_file, overwrite = TRUE)
 
-# 8.2 Hard class (argmax over probabilities)
-# Convert probability stack to class raster (factor levels)
+# 7.2 Hard class (argmax of probabilities)
 prob_mat_to_class <- function(p) {
-  # p: numeric matrix (n x k)
   if (!is.matrix(p)) p <- as.matrix(p)
-  m <- apply(p, 1, function(x) if (all(is.na(x))) NA_integer_ else which.max(x))
-  m
+  apply(p, 1, function(x) if (all(is.na(x))) NA_integer_ else which.max(x))
 }
 
 bs <- terra::blockSize(prob_r)
@@ -378,42 +273,16 @@ class_r <- prob_r[[1]]
 class_r <- terra::setValues(class_r, NA_integer_)
 class_r <- terra::writeStart(class_r, filename = out_class_file, overwrite = TRUE)
 
-levs <- sub("^p_", "", names(prob_r))
-
 for (i in seq_len(bs$n)) {
-  p <- terra::values(prob_r, row = bs$row[i], nrows = bs$nrows[i], mat = TRUE)
-  cls <- prob_mat_to_class(p)
+  pmat <- terra::values(prob_r, row = bs$row[i], nrows = bs$nrows[i], mat = TRUE)
+  cls  <- prob_mat_to_class(pmat)
   class_r <- terra::writeValues(class_r, cls, bs$row[i])
 }
 class_r <- terra::writeStop(class_r)
 
-# Store class as RAT / levels (optional)
-# (terra factor handling can be fragile across GDAL; keep minimal)
 names(class_r) <- "class_id"
 
+message("Predictor stack used:    ", pred_stack_file)
+message("Training points used:    ", train_pts_file)
 message("Wrote probability stack: ", out_prob_file)
 message("Wrote class raster:      ", out_class_file)
-
-# -----------------------------------------------------------------------------
-# 9) Optional: Area of Applicability (AOA) (CAST)
-# -----------------------------------------------------------------------------
-# AOA helps detect where the model extrapolates beyond training feature space.
-# This is useful for mapping trustworthiness of the pixel classification.
-#
-# NOTE: AOA can be expensive for big rasters. Use only if needed.
-#
-# Example (commented by default):
-#
-# train_features <- train_df[, pred_names]
-# aoa <- CAST::aoa(
-#   newdata   = pred_stack,      # can be SpatRaster
-#   model     = rf_fit,
-#   training  = train_features,
-#   response  = train_df$class
-# )
-# terra::writeRaster(aoa$AOA, paths[["s2_lc_rf_aoa_2021"]], overwrite = TRUE)
-# terra::writeRaster(aoa$DI,  paths[["s2_lc_rf_di_2021"]],  overwrite = TRUE)
-#
-# -----------------------------------------------------------------------------
-# End
-# -----------------------------------------------------------------------------

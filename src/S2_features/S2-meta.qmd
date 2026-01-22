@@ -1,0 +1,82 @@
+---
+title: "S2 meta — Derived raster and observation products"
+format:
+  html:
+    toc: true
+    code-fold: false
+    theme: default
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# S2: Derived raster and observation products
+
+Burgwald decision stack: meta-level description
+
+![](images/s2.drawio.svg){fig-align="center"}
+
+## Conceptual position of S2
+
+S2 denotes the layer of spatially explicit products that are derived directly from observations (S1) and remain defined on the native spatial support of the measurement system. For raster data, this is pixels; for in-situ networks, it is stations.
+
+S2 artefacts are transformations of measurements, not abstractions of spatial objects. They preserve physical or statistical interpretability and remain anchored in the observational domain. Typical S2 products include raster layers, per-pixel indices, pixel-wise classifications, probability fields and descriptive station summaries.
+
+S2 addresses a specific yet fundamental question:
+
+> What can be derived directly from measurements in space and time, before any segmentation, object formation or decision logic is introduced?
+
+This restriction is intentional. It prevents premature semantic commitments and keeps uncertainty and scale effects explicit.
+
+## Boundary conditions: what S2 explicitly excludes
+
+S2 does not contain spatial objects, segmentations or region abstractions. These belong to S3. It also excludes aggregated signatures or descriptors of objects, which belong to S4. Similarly, it does not contain learned representations or embeddings, which are assigned to S4L. It also excludes ranking, selection, optimisation and policy logic, which belong to S5.
+
+A product leaves the S2 domain whenever it requires reasoning over spatial units rather than pixels or stations, or whenever it encodes semantic decisions rather than measurements.
+
+## Functional role of S2 in the decision stack
+
+S2 fulfils three complementary functions.
+
+First, it produces physically interpretable predictor layers. Raw measurements are transformed into quantities that express terrain structure, hydrological context, vegetation structure, spectral behaviour or temporal dynamics. These layers form the quantitative basis for segmentation, signature construction and representation learning, but are not semantic objects themselves.
+
+Secondly, S2 supports pixel-level interpretation. Semantic information may appear at this stage, provided it is defined per pixel. Land-cover classifications, disturbance maps or probability surfaces are all legitimate S2 products. Pixel semantics do not imply object semantics; the unit of meaning remains the pixel.
+
+Thirdly, S2 includes descriptive observational summaries. Aggregated statistics, diagnostic figures or station climatologies remain part of S2 as long as they are purely descriptive and do not introduce decision-making logic or optimisation criteria.
+
+In the Burgwald implementation, this includes not only raster products but also explicitly registered tables and figures as artefacts, provided they remain descriptive (e.g. wind roses, frequency tables, buffer-mean summaries).
+
+## Design principles for S2 processing
+
+All S2 products are subject to strict constraints regarding reproducibility and transparency.
+
+Inputs and outputs are centrally registered via the project registry and must not be hard-coded. Transformations must be explicit; implicit thresholds, undocumented resampling, silent smoothing or hidden aggregation must be avoided.
+
+Spatial support is controlled deliberately. The canonical working grid is a 10 m raster. Higher-resolution sources may be used internally, but they must be aggregated deterministically. Sub-pixel modelling is intentionally excluded at this level to avoid scale ambiguity.
+
+S2 scripts may depend operationally on artefacts from other levels, but they must not modify or overwrite artefacts outside of S2. Any operational exception (e.g. provider raw ZIP conventions not managed by the registry) must be stated explicitly as a design decision.
+
+## Product families in the Burgwald context
+
+Terrain and hydrological derivatives transform a DEM into morphometric and flow-related predictors. These layers express physical structure and serve as quantitative inputs for later stages. In the current implementation, SAGA-based processing is run with explicit tool outputs and disk-backed intermediate grids to avoid implicit wrapper behaviour. Final products are exported as GeoTIFF stacks and single rasters on the canonical grid (e.g. relief stack, flow accumulation, stream distance, Strahler order, watershed IDs).
+
+Biostructural derivatives transform a DOM/DSM and DEM into canopy-structure predictors. The logic is strictly geometric: a canopy height model is formed by differencing (DOM − DEM), negative artefacts are clamped to zero, and blockwise statistics are aggregated deterministically from 1 m to 10 m. Canonical products include mean canopy height, p95 height, canopy height variability (sd), and canopy fraction above an explicit height threshold.
+
+Pixel-based classifications generate categorical maps from predictor stacks. The training infrastructure may use external geometries (e.g. polygon training areas), but the classification output is a per-pixel raster and remains an S2 artefact. In the current scripts, this includes unsupervised k-means exploration, Maximum Likelihood Classification, and Random Forest classification, with explicit persistence of the trained model and confusion matrix as registered artefacts.
+
+Time-series analyses operate on pixel stacks and produce per-pixel diagnostics of temporal behaviour. Change detection via BFAST on a kNDVI time series is a typical S2 product: each pixel yields a change date and change magnitude, without any object assumption.
+
+Canonical predictor stacks can also be an S2 product, as long as they remain pixel-aligned measurement-derived layers. In the current implementation, an RF-ready predictor stack is created by appending registered S2 feature rasters and applying explicit reduction rules only to continuous predictors (zero-variance removal, exact linear combinations, and correlation pruning), while categorical layers are preserved unchanged. The baseline stack remains untouched; the reduced stack is written as a new registered product.
+
+Observational climate summaries condense station measurements into descriptive statistics and visualisations, without applying decision logic. In the current wind climatology workflow, raw DWD ZIP inputs are intentionally treated as provider-managed (folder convention), while all resulting derived tables and figures are written exclusively to registry-defined output locations. Spatial filtering (e.g. AOI buffer selection) is a descriptive subset operation and remains within S2 as long as it does not become a selection criterion for downstream optimisation.
+
+## Semantic versus organisational ordering
+
+The semantic level of a product is defined by its meaning rather than the execution order in the processing pipeline. Some S2 products may depend on non-registry raw inputs (provider conventions) or auxiliary geometries for practical reasons. This does not change their semantic classification as S2, provided the outputs remain pixel-based or purely descriptive at station level and do not introduce object semantics or decision logic.
+
+This distinction between the semantic level and the orchestration order is essential in order to maintain a flexible architecture without blurring conceptual responsibilities.
+
+## Contract statement
+
+S2 comprises all spatially explicit products that are derived directly from observations, prior to any segmentation, abstraction or decision logic. These products preserve physical or statistical interpretability and form the quantitative basis for all higher-level representations and decisions. In Burgwald, this includes both raster artefacts (indices, derivatives, classifications, change layers, canonical stacks) and descriptive station-based artefacts (tables and figures), provided they remain transformations and summaries rather than decisions.

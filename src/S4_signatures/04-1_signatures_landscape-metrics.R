@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 ############################################################
-# Script:   03-2_analysis_landscape-metrics-burgwald.R
+# Script:   04-1_signatures_landscape-metrics.R
 # Project:  Burgwald
 #
 # Purpose:
@@ -61,8 +61,8 @@ seg_file <- paths[["layer0_segments"]]
 # (B) Categorical landcover / classification raster for H/U
 # Prefer a 10 m classification (RF/MLC/kmeans) if available; else use CLC.
 # You decide by changing this one line.
-lc_file  <- paths[["classification_rf"]]  # <- preferred (10 m, categorical)
-# lc_file <- paths[["aoi_clc"]]           # <- fallback (CLC 100 m)
+#lc_file  <- paths[["classification_rf"]]  # <- preferred (10 m, categorical)
+lc_file <- paths[["aoi_clc"]]              # <- fallback (CLC 100 m)
 
 stopifnot(file.exists(seg_file))
 stopifnot(file.exists(lc_file))
@@ -77,7 +77,17 @@ out_gpkg <- paths[["layer0_attr_it_metrics"]]
 ## 3) Load data
 ## -------------------------------------------------------------------
 
+# Landcover / classification raster (categorical)
+lc <- terra::rast(lc_file)
+
+# Segments
 segs <- sf::read_sf(seg_file)
+
+# Ensure CRS match (avoid on-the-fly transformation inside exactextractr)
+crs_lc <- terra::crs(lc, proj = TRUE)
+if (!identical(sf::st_crs(segs)$wkt, crs_lc)) {
+  segs <- sf::st_transform(segs, crs_lc)
+}
 
 # Ensure there is a stable segment id field.
 # Your segmentation export uses "segment_id" (from the label raster value).
@@ -86,46 +96,28 @@ stopifnot("segment_id" %in% names(segs))
 # Ensure integer ID (important for rasterization and joins).
 segs$segment_id <- as.integer(segs$segment_id)
 
-# Landcover / classification raster (categorical)
-lc <- terra::rast(lc_file)
-
-crs_lc <- terra::crs(lc, proj = TRUE)
-if (!identical(sf::st_crs(segs)$wkt, crs_lc)) segs <- sf::st_transform(segs, crs_lc)
-
 ## -------------------------------------------------------------------
 ## 4) Metric 1: H(x) per segment (composition) using exactextractr
 ## -------------------------------------------------------------------
-# exactextractr returns per-polygon class coverage fast and with partial-pixel weights.
-# For entropy we only need class proportions p_k within each segment.
+# exactextractr computes polygon-overlap weights (coverage_fraction) exactly.
+# For class composition we use fun="frac", which returns coverage-weighted class
+# proportions p_k (one column per class value). This is sufficient for Shannon H.
 
-# Helper: Shannon entropy from a named numeric vector of class weights
-shannon_entropy <- function(w) {
-  w <- w[is.finite(w) & w > 0]
-  if (length(w) == 0) return(NA_real_)
-  p <- w / sum(w)
+# Helper: Shannon entropy from a numeric vector of proportions p_k
+shannon_entropy <- function(p) {
+  p <- p[is.finite(p) & p > 0]
+  if (length(p) == 0) return(NA_real_)
   -sum(p * log(p))
 }
 
-# exact_extract(..., fun = "freq") returns a data.frame per polygon:
-# value = class value; count = weighted cell count (coverage-weighted).
-# We compute H from coverage-weighted counts.
-freq_list <- exactextractr::exact_extract(lc, segs, fun = "freq")
+# Class proportions per segment (coverage-weighted, deterministic)
+frac_df <- exactextractr::exact_extract(lc, segs, fun = "frac")
 
-# Convert list-of-data.frames to entropy per segment_id
-H_df <- rbindlist(
-  lapply(seq_along(freq_list), function(i) {
-    df <- freq_list[[i]]
-    # exactextractr::freq output columns: "value", "count"
-    # (count is coverage-weighted cell count or area-weighted depending on raster)
-    if (is.null(df) || nrow(df) == 0) {
-      return(data.table(segment_id = segs$segment_id[i], H = NA_real_, K = 0L))
-    }
-    w <- df$count
-    H <- shannon_entropy(w)
-    K <- sum(is.finite(w) & w > 0)
-    data.table(segment_id = segs$segment_id[i], H = H, K = as.integer(K))
-  }),
-  use.names = TRUE, fill = TRUE
+# Entropy and class richness per segment
+H_df <- data.table(
+  segment_id = segs$segment_id,
+  H = apply(frac_df, 1, shannon_entropy),
+  K = apply(frac_df, 1, function(p) sum(is.finite(p) & p > 0))
 )
 
 # Optional normalized entropy (0..1), defined as H / log(K) for K>=2
@@ -220,7 +212,7 @@ U_df <- U_df[, .(segment_id, I, U)]
 
 # Add segment area (metric CRS if available; otherwise compute in native CRS)
 # If segments are lon/lat, st_area returns spherical area; still OK for relative size.
-segs$area_m2 <- as.numeric(sf::st_area(segs$geometry))
+segs$area_m2 <- as.numeric(sf::st_area(segs$geom))
 
 # Join metrics
 segs <- segs %>%
