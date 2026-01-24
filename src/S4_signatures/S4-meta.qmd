@@ -1,8 +1,12 @@
 ---
-title: "S4 meta — Deterministic signatures and attribute space"
+title: "S4 — Signatures as Explicit Structural Representations"
+subtitle: "Burgwald Decision Stack — Reader"
 format:
   html:
     toc: true
+  pdf:
+    toc: false
+    number-sections: true    
 execute:
   echo: false
   warning: false
@@ -15,128 +19,192 @@ Burgwald decision stack: meta-level description
 
 ![](images/s4.drawio.svg){fig-align="center"}
 
-## Conceptual position of S4
 
-S4 denotes the layer in which fixed spatial structures (segments from S3) are
-transformed into a deterministic attribute space. The unit of computation is the
-segment. All quantities in S4 are attached to segment geometry and indexed by a
-stable segment identifier.
 
-S4 introduces no new spatial structure and no semantic interpretation. It
-performs explicit, reproducible aggregation of upstream products in order to
-create segment-level descriptors (“signatures”). These signatures remain purely
-descriptive and preserve traceability to their originating measurements and
-transformations.
+## From Segments to Representable Objects
 
-S4 addresses a specific question:
+After S3 the system has achieved geometric stability. The MeanShift segmentation defines spatial units that are reproducible, scale-consistent and topologically clean. At this point, however, the system still does not *know* anything about these units. A segment is only a polygon with an identifier and a shape. All semantic or structural meaning remains implicit in the raster fields underneath.
 
-> Which properties of a fixed spatial structure can be derived deterministically
-> and represented as a stable attribute space, prior to any learning, selection,
-> or decision logic?
+This situation is typical for object-based spatial analysis: segmentation produces spatial objects, but meaning only emerges once attributes are explicitly constructed and interpreted, not from geometry alone.[^5] [^6]
 
-This restriction is intentional. S4 prepares representations but does not
-interpret them.
+S4 exists to close exactly this gap. It transforms segments into **explicit representable objects** by attaching deterministic, interpretable descriptors. These descriptors are called *signatures*.
 
----
+In practical terms, S4 consumes the stable segment geometry, the derived raster fields from S2 (relief, hydrology, biostructure), and categorical overlays used for diagnostic structure, and produces a consolidated attribute stack in which each segment carries a structured vector of metrics and derived tokens.
 
-## Boundary conditions: what S4 explicitly excludes
+No learning, optimisation or classification occurs in S4. Every transformation is deterministic and reversible.
 
-S4 does not contain raster products or pixel-based predictors (S2).  
-It does not create or modify spatial partitions (S3).  
-It does not perform representation learning, embedding, or latent modelling
-(S4L).  
-It does not perform ranking, optimisation, or decision logic (S5).
 
-Any operation that introduces preferences, thresholds motivated by objectives,
-candidate selection, or trade-off reasoning is outside the S4 domain.
 
----
+## What a Signature Means in This Architecture
 
-## Functional role of S4 in the decision stack
+A signature is not a feature vector in the machine-learning sense. It is a **representational contract**: a fixed mapping from spatial structure into a finite, interpretable descriptor space. This notion aligns with geographic object models where meaning is explicitly attached through attributes rather than inferred implicitly from pixels or geometry.[^6] [^20]
 
-S4 fulfils three complementary functions.
+Formally, for a segment $s$ and a set of aligned representation layers $L_k$, a signature is defined as:
 
-First, it provides a stable attribute space. Segment geometry from S3 becomes the
-carrier of quantitative descriptors that can be used consistently across
-downstream workflows.
+$$
+\mathbf{z}(s) = \left[ f_1(L_1 \mid s), f_2(L_2 \mid s), \dots, f_n(L_n \mid s) \right]
+$$
 
-Second, it externalises aggregation logic. Instead of implicit neighbourhoods or
-ad-hoc summaries, aggregation is expressed explicitly as zonal extraction and
-joins, making scale and support effects visible and reproducible.
+Each operator $f_i$ is an explicit aggregation or transformation (mean, quantile, entropy, adjacency statistic, fraction). There is no parameter fitting and no data-driven adaptation at this level.
 
-Third, it enables modular composition of representations. Independent signature
-families can be generated and combined without coupling their semantics or
-execution order.
+Three properties matter operationally.
 
-In the Burgwald implementation, the main S4 artefact is a unified attribute stack
-attached to segment geometry.
+First, **determinism**: the same inputs always produce the same signature.
 
----
+Second, **interpretability**: each component corresponds to a physically or structurally meaningful quantity.
 
-## Design principles for S4 processing
+Third, **scale binding**: the signature is valid only at the segmentation scale and raster resolution used upstream. This explicitly acknowledges the modifiable areal unit problem and aggregation effects that inevitably arise in spatial analysis.[^7] [^8] [^19]
 
-All S4 products follow strict constraints.
+A signature therefore encodes structured description, not inference. This distinction is essential because later stages (S4L, S5) rely on the stability and auditability of these representations.
 
-Inputs and outputs are registry-defined. No paths, layers, or intermediate
-artefacts are hard-coded.
 
-Geometry is inherited exclusively from S3. Segment identifiers are persistent
-and form the primary key for all joins and validations.
 
-Transformations are explicit and deterministic. Aggregation operators, joins,
-and derived quantities are declared in code and produce identical results under
-re-execution.
+## Why S4 Is Not Just “Feature Engineering”
 
-S4 remains descriptive. Any discretisation or encoding is treated as a
-representational variant, not as a semantic or decision step.
+Without an explicit signature layer, feature construction tends to drift toward whatever improves downstream model performance. The result is usually a growing collection of opaque predictors whose meaning, scale behaviour and coupling to physical processes becomes unclear.[^14] [^15]
 
----
+S4 enforces a separation of concerns.
 
-## Product families in the Burgwald context
+S2 answers how raw measurements are transformed into stable spatial fields.  
+S3 answers how space is partitioned into stable units.  
+S4 answers how each unit is described structurally in a controlled way.
 
-Information-theoretic and landscape metrics derive structural descriptors of
-composition and configuration at segment level.
+Only after this representational discipline is established does it make sense to introduce learning or optimisation. This mirrors the broader distinction between handcrafted representations and learned embeddings in representation learning literature.[^16] [^17]
 
-Physiographic metrics derive segment attributes from terrain-related predictors
-(elevation and derivative fields).
 
-Hydrological metrics derive segment attributes from flow-related and network
-products.
 
-Cover metrics derive per-class fractions and composition descriptors from
-categorical layers.
+## Structural Domains of the Current Signatures
 
-Biostructural metrics derive segment attributes from canopy and structure
-rasters via zonal extraction.
+The concrete S4 implementation reflects the actual scripts in the repository. Each domain contributes a coherent block of metrics that is later joined into the attribute stack.
 
-An integration step joins all partial signature layers into a single attribute
-stack attached to the segment geometry. Optional transparent discretisations may
-be generated strictly as parallel representations.
+### Landscape configuration (information-theoretic metrics)
 
-All products remain keyed by the same segment identifiers and retain direct
-traceability to upstream layers.
+The landscape metrics pipeline computes composition and configuration descriptors per segment using a categorical raster.
 
----
+Shannon entropy measures compositional diversity:
 
-## Semantic versus organisational ordering
+$$
+H = -\sum_k p_k \log(p_k)
+$$
 
-The semantic classification of S4 is independent of execution order. A workflow
-remains part of S4 as long as it produces deterministic, segment-level
-descriptors without introducing learning or decision logic.
+where $p_k$ is the area-weighted proportion of class $k$ inside the segment. The entropy concept originates from information theory and has long been used to characterise landscape heterogeneity.[^1] [^3]
 
-Conversely, any workflow that transforms these descriptors into latent
-representations, embeddings, rankings, or selections leaves S4 by definition,
-regardless of its position in the processing pipeline.
+Configuration is captured using relative mutual information:
 
-Maintaining this distinction prevents entanglement of representation,
-structure, and decision semantics.
+$$
+U = \frac{I}{H}
+$$
 
----
+with
 
-## Contract statement
+$$
+I = \sum_{i,j} p(i,j)\,\log\!\left(\frac{p(i,j)}{p(i)\,p(j)}\right)
+$$
 
-S4 comprises deterministic, auditable signatures attached to fixed spatial
-structures. It transforms S3 segments into a stable attribute space via explicit
-aggregation and joins, without introducing learning, semantics, or decision
-logic. These representations form the quantitative basis for all subsequent
-modelling and decision layers.
+Here $p(i,j)$ is the joint probability of adjacent class pairs inside the segment. Similar information-based pattern measures are well established in landscape ecology.[^2] [^4]
+
+The important point is not the numerical value itself but the diagnostic role: $H$ and $U$ jointly express whether a segment is internally homogeneous, mixed, or spatially organised. Their values depend on segmentation scale and raster resolution; this is an explicit feedback between S3 and S4 rather than an artefact.
+
+
+
+### Physiographic embedding
+
+Physiographic metrics attach terrain-based context to each segment: mean elevation, mean slope, mean aspect and derived southness, optionally complemented by windwardness.
+
+Southness is derived from aspect $\theta$ as:
+
+$$
+\mathrm{southness} = \frac{\cos(\theta - \pi) + 1}{2}
+$$
+
+This mapping is commonly used to linearise aspect into an interpretable radiation-exposure proxy.[^9]
+
+Physiographic metrics provide slow-varying structural constraints and anchor each segment in long-term geomorphological context.[^9]
+
+
+
+### Hydrological embedding
+
+Hydrological metrics aggregate watershed identifiers, Strahler order, flow accumulation and proximity to streams.
+
+These quantities encode topological embedding and connectivity rather than hydrodynamic behaviour, following classical geomorphological interpretations of drainage structure.[^10] [^11]
+
+
+
+### Biostructural embedding
+
+Biostructure metrics aggregate canopy structure fields derived from surface and terrain models: mean canopy height, upper height percentiles, height variability and canopy fraction.
+
+These metrics follow established practice in lidar-based vegetation structure analysis and deliberately avoid species-level interpretation.[^12] [^13]
+
+
+
+## From Metrics to Tokens: Controlled Symbolic Compression
+
+Several continuous metrics are discretised into three robust bins using global tertiles and encoded as symbolic tokens.
+
+Symbolic compression supports readability, filtering and rule construction, but must remain layered on top of quantitative representations rather than replacing them.[^18]
+
+Tokens are therefore pragmatic abstractions, not learned regimes.
+
+
+
+## The Attribute Stack][ as the S4 Product
+
+All metric tables are joined onto the stable segment geometry to form the attribute stack. Geometry is inherited exclusively from the segmentation backbone. No geometries are merged or altered.
+
+The attribute stack is the canonical S4 artefact: a spatial table in which each segment carries its full signature vector and optional tokens.
+
+
+
+## The Boundary Between S4 and S4L
+
+S4 ends with explicit, human-interpretable signatures. At this point, the system has not yet constructed types or regimes.
+
+S4L introduces learned representations: embeddings, latent regimes or similarity structures derived from the S4 attribute space using machine-learning models.[^16] [^17]
+
+This separation avoids the failure mode where representation construction and decision logic become entangled in a single opaque pipeline.[^15]
+
+Random Forest models operate on the S4 attribute space but are documented separately and do not belong to S4 conceptually.
+
+
+
+## Why This Layer Matters Architecturally
+
+S4 establishes a stable representational interface between geometry and intelligence. It enables explicit reasoning about structure, transparent auditing of assumptions and controlled extension toward learned representations.
+
+The transformation chain becomes:
+
+$$
+\text{Observations} \rightarrow
+\text{Derived Fields} \rightarrow
+\text{Segments} \rightarrow
+\text{Signatures (S4)} \rightarrow
+\text{Learned Representations (S4L)} \rightarrow
+\text{Decisions (S5)}.
+$$
+
+S4 is therefore not a technical convenience. It is the epistemic stabiliser of the entire architecture.
+
+
+
+[^1]: Shannon, C. E. (1948). *Bell System Technical Journal*.  
+[^2]: Li, H., & Reynolds, J. F. (1993). *Landscape Ecology*.  
+[^3]: McGarigal, K., Cushman, S. A., & Ene, E. (2012). *FRAGSTATS v4*.  
+[^4]: Cushman, S. A., & McGarigal, K. (2002). *Landscape Ecology*.  
+[^5]: Blaschke, T. (2010). *ISPRS Journal of Photogrammetry and Remote Sensing*.  
+[^6]: Hay, G. J., & Castilla, G. (2008). *Photogrammetric Engineering & Remote Sensing*.  
+[^7]: O’Sullivan, D., & Unwin, D. (2010). *Geographic Information Analysis*.  
+[^8]: Atkinson, P. M., & Tate, N. J. (2000). *Professional Geographer*.  
+[^9]: Wilson, J. P., & Gallant, J. C. (2000). *Terrain Analysis*.  
+[^10]: Strahler, A. N. (1957). *Transactions of the American Geophysical Union*.  
+[^11]: Moore, I. D., Grayson, R. B., & Ladson, A. R. (1991). *Hydrological Processes*.  
+[^12]: Lefsky, M. A. et al. (2002). *BioScience*.  
+[^13]: Dubayah, R., & Drake, J. (2000). *Journal of Forestry*.  
+[^14]: Guyon, I., & Elisseeff, A. (2003). *JMLR*.  
+[^15]: Lipton, Z. C. (2018). *Communications of the ACM*.  
+[^16]: Bengio, Y., Courville, A., & Vincent, P. (2013). *IEEE TPAMI*.  
+[^17]: Raghu, M., et al. (2017). *ICML*.  
+[^18]: Hastie, T., Tibshirani, R., & Friedman, J. (2009). *Elements of Statistical Learning*.  
+[^19]: Goodchild, M. F. (2011). *GIS&T Body of Knowledge*.  
+[^20]: Couclelis, H. (1992). *Spatio-Temporal Reasoning in Geographic Space*.  

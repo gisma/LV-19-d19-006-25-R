@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# Script:   03-3_classification_rf_cast_pixelwise.R
+# Script:   04-7_signatures_RF-points_classification.R
 # Project:  Burgwald Decision Stack
 #
 # PURPOSE
