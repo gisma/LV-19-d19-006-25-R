@@ -49,7 +49,7 @@ for (p in unname(paths)) {
 source(here::here("src", "r-libs", "01-fun-data-retrieval.R"))
 
 burgwald_bbox <- c(
-  xmin = 8.70,
+  xmin = 8.70,    
   xmax = 9.00,
   ymin = 50.85,
   ymax = 51.05

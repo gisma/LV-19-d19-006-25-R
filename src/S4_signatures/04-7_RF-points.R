@@ -6,9 +6,9 @@
 #
 # PURPOSE
 # -------
-# Pixel-wise landcover classification using Random Forest (caret + ranger),
+# Pixel-wise landcover classification using Random Forest (caret + randomForest),
 # including:
-#   - spatial CV grouped by segment_id (CAST)
+#   - spatial CV via sperrorest blocks (kmeans)
 #   - CAST forward feature selection (ffs) with pairwise start (mtry=2)
 #   - final RF fit on selected predictors
 #   - pixel-wise probability + hard class_id raster
@@ -24,6 +24,8 @@ suppressPackageStartupMessages({
   library(readr)
   library(caret)
   library(CAST)
+  library(sperrorest)
+  library(randomForest)
 })
 
 source(here::here("src", "_core", "01-setup-burgwald.R"))
@@ -62,7 +64,7 @@ set.seed(1)
 k_folds    <- 5L
 ffs_ntree  <- 500L
 ffs_mtry   <- 2L          # pairwise start => mtry=2 in vignette logic
-ffs_verbose <- TRUE      # set TRUE if CAST prints progress internally
+ffs_verbose <- TRUE       # set TRUE if CAST prints progress internally
 
 # -----------------------------------------------------------------------------
 # 2) Load predictor stack
@@ -77,7 +79,7 @@ stopifnot(is.finite(p) && p >= 2)
 msg("Predictor bands (p): ", p)
 
 # -----------------------------------------------------------------------------
-# 3) Load segments (CAST grouping)
+# 3) Load segments (for join / segment_id)
 # -----------------------------------------------------------------------------
 
 msg("Loading segments: ", seg_file)
@@ -121,17 +123,26 @@ if (nrow(train_pts_join) == 0) {
   stop("No training points fall within segments. Check CRS / alignment / coverage.")
 }
 
+if (sf::st_is_longlat(train_pts_join)) {
+  stop("Training points are in lon/lat degrees. sperrorest partitioning requires a projected CRS (meters). Reproject your segments/train points to UTM (or another metric CRS) before running this script.")
+}
+
+xy <- sf::st_coordinates(train_pts_join)
+
 train_df <- train_pts_join %>%
+  mutate(x = xy[,1], y = xy[,2]) %>%
   sf::st_drop_geometry() %>%
   mutate(
-    class      = as.factor(class),          # keep factor from 02 (now fixed)
+    class      = as.factor(class),
     class_id   = as.integer(class_id),
     code       = as.integer(code),
     class_name = as.character(class_name)
   ) %>%
-  select(segment_id, class, class_id, code, class_name, all_of(pred_names)) %>%
+  select(x, y, segment_id, class, class_id, code, class_name, all_of(pred_names)) %>%
   filter(
     is.finite(class_id),
+    is.finite(x),
+    is.finite(y),
     !is.na(class_name),
     !is.na(class),
     if_all(all_of(pred_names), ~ is.finite(.x))
@@ -139,47 +150,46 @@ train_df <- train_pts_join %>%
 
 if (nrow(train_df) == 0) stop("Training table empty after finite filtering.")
 
-# ensure factor outcome (no per-row unique suffixes; 02 now guarantees class is sane)
 train_df$class <- droplevels(as.factor(train_df$class))
 
 msg(sprintf("Training table: n=%d  predictors=%d  class_levels=%d",
             nrow(train_df), length(pred_names), nlevels(train_df$class)))
 
 # -----------------------------------------------------------------------------
-# 4.1) Build level -> class_id lookup (for writing class_id raster)
+# 5) Spatial CV folds (sperrorest blocks; leave-one-block-out)
 # -----------------------------------------------------------------------------
 
-class_lookup <- train_df %>%
-  distinct(class, class_id, code, class_name)
+msg("Building spatial CV folds (sperrorest::partition_kmeans; nfold=", k_folds, ") ...")
 
-ambig <- class_lookup %>%
-  count(class) %>%
-  filter(n != 1)
+xy_df <- train_df[, c("x", "y")]
+names(xy_df) <- c("X", "Y")
 
-if (nrow(ambig) > 0) {
-  stop("Ambiguous class mapping (class -> class_id not unique). Fix training points: ",
-       paste(ambig$class, collapse = ", "))
-}
-
-# -----------------------------------------------------------------------------
-# 5) Spatial CV folds (CAST)
-# -----------------------------------------------------------------------------
-
-msg("Building spatial CV folds (segment_id, k=", k_folds, ") ...")
-
-folds <- CAST::CreateSpacetimeFolds(
-  x        = train_df,
-  spacevar = "segment_id",
-  timevar  = NA,
-  k        = k_folds,
-  class    = "class",
-  seed     = 1
+# returns list (one element per repetition). We use repetition=1.
+x_partition <- sperrorest::partition_kmeans(
+  xy_df,
+  coords = c("X", "Y"),
+  nfold = k_folds,
+  seed1 = 1,
+  return_factor = TRUE
 )
+
+fold_fac <- as.vector(x_partition[[1]])
+if (anyNA(fold_fac)) stop("sperrorest partition returned NA fold assignments.")
+
+fold_ids <- sort(unique(fold_fac))
+all_idx  <- seq_len(nrow(train_df))
+
+# leave-one-block-out over the sperrorest blocks
+fold_indexOut <- lapply(fold_ids, function(k) which(fold_fac == k))
+fold_index    <- lapply(fold_indexOut, function(test_idx) setdiff(all_idx, test_idx))
+
+names(fold_index)    <- paste0("SP_", fold_ids)
+names(fold_indexOut) <- paste0("SP_", fold_ids)
 
 ctrl <- caret::trainControl(
   method          = "cv",
-  index           = folds$index,
-  indexOut        = folds$indexOut,
+  index           = fold_index,
+  indexOut        = fold_indexOut,
   savePredictions = "final",
   classProbs      = TRUE,
   summaryFunction = caret::multiClassSummary,
@@ -197,7 +207,6 @@ msg("Initial 2-var combinations: ", choose(length(pred_names), 2))
 msg("mtry fixed at 2 for pairwise start; ntree=", ffs_ntree)
 msg("--------------------------------------------------")
 
-# IMPORTANT: CAST::ffs uses 'predictors' + 'response' (not x/y, not names)
 set.seed(1)
 ffs_fit <- CAST::ffs(
   predictors = train_df[, pred_names, drop = FALSE],
@@ -212,36 +221,39 @@ ffs_fit <- CAST::ffs(
 msg("FFS finished.")
 print(ffs_fit)
 
-sel_preds <- ffs_fit$optVariables
-if (is.null(sel_preds) || length(sel_preds) < 2) {
-  stop("FFS did not return >=2 selected predictors. optVariables is empty/too small.")
-}
+sel_preds <- as.character(ffs_fit$selectedvars)
+sel_preds <- sel_preds[sel_preds %in% pred_names]
 
-msg("Selected predictors (n=", length(sel_preds), "): ", paste(sel_preds, collapse = ", "))
-
-# subset stack to selected predictors for prediction + AOA
 pred_stack_sel <- pred_stack[[sel_preds]]
 
 # -----------------------------------------------------------------------------
-# 7) Final RF training on selected predictors (ranger)
+# 7) Final RF training on selected predictors (caret + randomForest)
 # -----------------------------------------------------------------------------
 
-msg("Training final RF (ranger) on selected predictors ...")
+msg("Training final RF (randomForest) on selected predictors ...")
+
+if (length(sel_preds) < 1) stop("No predictors selected by FFS.")
+if (length(sel_preds) < 2) msg("Note: only 1 predictor selected; mtry will be forced to 1.")
+
+mtry_grid <- data.frame(
+  mtry = unique(pmax(1L, pmin(length(sel_preds), c(1L, 2L, 4L, floor(sqrt(length(sel_preds)))))))
+)
 
 rf_fit <- caret::train(
-  x          = train_df[, sel_preds, drop = FALSE],
-  y          = train_df$class,
-  method     = "ranger",
-  trControl  = ctrl,
-  importance = "impurity",
-  metric     = "ROC"
+  x         = train_df[, sel_preds, drop = FALSE],
+  y         = train_df$class,
+  method    = "rf",
+  trControl = ctrl,
+  tuneGrid  = mtry_grid,
+  metric    = "Kappa",
+  ntree     = 500L
 )
 
 saveRDS(rf_fit, out_model_rds)
 
 cv_res <- rf_fit$results %>%
   as_tibble() %>%
-  arrange(desc(ROC))
+  arrange(desc(Kappa))
 
 readr::write_csv(cv_res, out_cv_csv)
 
@@ -256,111 +268,95 @@ predict_raster_probs <- function(rast_stack, model, filename, pred_names, overwr
   levs <- levels(model$trainingData$.outcome)[[1]]
   ncls <- length(levs)
   
-  out <- rast_stack[[1]]
-  out <- terra::rast(out)
-  out <- terra::setValues(out, NA_real_)
-  out <- terra::wrap(out)
-  out <- out[[rep(1, ncls)]]
+  tpl <- rast_stack[[1]]
+  out <- terra::rast(tpl, nlyrs = ncls)
   names(out) <- paste0("p_", levs)
   
-  bs  <- terra::blockSize(rast_stack)
+  blks <- terra::blocks(rast_stack)
+  if (is.null(blks$row) || is.null(blks$nrows)) {
+    stop("terra::blocks() did not return $row/$nrows as expected.")
+  }
+  
   out <- terra::writeStart(out, filename = filename, overwrite = overwrite)
   
-  for (i in seq_len(bs$n)) {
-    v  <- terra::values(rast_stack, row = bs$row[i], nrows = bs$nrows[i], mat = TRUE)
-    ok <- apply(v, 1, function(x) all(is.finite(x)))
+  for (i in seq_along(blks$row)) {
+    v <- terra::values(rast_stack, row = blks$row[i], nrows = blks$nrows[i], mat = TRUE)
     
+    ok <- apply(v, 1, function(x) all(is.finite(x)))
     pred_block <- matrix(NA_real_, nrow = nrow(v), ncol = ncls)
     
     if (any(ok)) {
       df <- as.data.frame(v[ok, , drop = FALSE])
       colnames(df) <- pred_names
+      
       pp <- predict(model, newdata = df, type = "prob")
+      
+      # ensure column order matches levs
+      pp <- pp[, levs, drop = FALSE]
       pred_block[ok, ] <- as.matrix(pp)
     }
     
-    out <- terra::writeValues(out, pred_block, bs$row[i])
+    terra::writeValues(out, pred_block, blks$row[i])
+    if (i %% 10 == 0) msg("  block ", i, "/", length(blks$row))
   }
   
-  terra::writeStop(out)
-  terra::rast(filename)
+  out <- terra::writeStop(out)
+  out
 }
 
-msg("Predicting probability stack ...")
-prob_r <- predict_raster_probs(
-  pred_stack_sel,
-  rf_fit,
-  out_prob_file,
-  sel_preds,
-  overwrite = TRUE
-)
+msg("Predicting pixel-wise probabilities -> ", out_prob_file)
+prob_r <- predict_raster_probs(pred_stack_sel, rf_fit, out_prob_file, sel_preds, overwrite = TRUE)
 
-# hard class_id
-msg("Writing hard class_id raster (argmax over probs) ...")
+# hard class map: argmax over probs -> class label -> class_id mapping
+msg("Building hard class_id raster -> ", out_class_file)
 
+# factor levels from training
 levs <- levels(rf_fit$trainingData$.outcome)[[1]]
-class_id_by_level <- class_lookup$class_id[match(levs, class_lookup$class)]
-if (any(!is.finite(class_id_by_level))) stop("Lookup failed: some model levels missing in class_lookup.")
 
-prob_mat_to_class_id <- function(pmat, class_id_by_level) {
-  if (!is.matrix(pmat)) pmat <- as.matrix(pmat)
-  apply(pmat, 1, function(x) {
-    if (all(is.na(x))) NA_integer_
-    else class_id_by_level[which.max(x)]
-  })
+# map class label -> class_id (from training table)
+class_map <- train_df %>%
+  distinct(class, class_id) %>%
+  mutate(class = as.character(class))
+
+# ensure 1-1 mapping
+if (any(duplicated(class_map$class))) {
+  stop("class -> class_id mapping is not unique in training data.")
 }
 
-bs <- terra::blockSize(prob_r)
-class_r <- prob_r[[1]]
-class_r <- terra::setValues(class_r, NA_integer_)
-class_r <- terra::writeStart(class_r, filename = out_class_file, overwrite = TRUE)
+# argmax index raster
+mx <- terra::which.max(prob_r)
+mx_vals <- terra::values(mx, mat = FALSE)
 
-for (i in seq_len(bs$n)) {
-  pmat <- terra::values(prob_r, row = bs$row[i], nrows = bs$nrows[i], mat = TRUE)
-  cls  <- prob_mat_to_class_id(pmat, class_id_by_level)
-  class_r <- terra::writeValues(class_r, cls, bs$row[i])
-}
-class_r <- terra::writeStop(class_r)
+# convert to class label then class_id
+cls_lab <- levs[mx_vals]
+cls_id <- class_map$class_id[match(cls_lab, class_map$class)]
+
+class_r <- terra::rast(mx)
+terra::values(class_r) <- cls_id
 names(class_r) <- "class_id"
 
+terra::writeRaster(class_r, out_class_file, overwrite = TRUE)
+
 # -----------------------------------------------------------------------------
-# 9) AOA + Error Profiles (DI / LPD)
+# 9) CAST AOA (DI/LPD) + error profiles
 # -----------------------------------------------------------------------------
 
-msg("Computing AOA (LPD=TRUE) ...")
-AOA <- CAST::aoa(
-  pred_stack_sel,
-  rf_fit,
-  LPD = TRUE,
-  verbose = FALSE
-)
-msg("AOA finished.")
+msg("Computing CAST::aoa (DI/LPD) ...")
+AOA <- CAST::aoa(pred_stack_sel, rf_fit, LPD = TRUE, verbose = TRUE)
 
-msg("Computing error profiles (DI / LPD) ...")
-DI_error_model <- CAST::errorProfiles(rf_fit, AOA, variable = "DI")
+# errorProfiles for DI / LPD
+msg("Computing CAST::errorProfiles for DI / LPD ...")
+DI_error_model  <- CAST::errorProfiles(rf_fit, AOA, variable = "DI")
 LPD_error_model <- CAST::errorProfiles(rf_fit, AOA, variable = "LPD")
-msg("Error profiling finished.")
 
-# -----------------------------------------------------------------------------
-# 10) Summary
-# -----------------------------------------------------------------------------
+# save AOA layers next to outputs (keep paths[] discipline? -> use out_prob_file dir)
+aoa_dir <- file.path(dirname(out_prob_file), "aoa")
+dir.create(aoa_dir, recursive = TRUE, showWarnings = FALSE)
 
-msg("Predictor stack used:    ", pred_stack_file)
-msg("Training points used:    ", train_pts_file)
-msg("Selected predictors:     ", paste(sel_preds, collapse = ", "))
-msg("Wrote probability stack: ", out_prob_file)
-msg("Wrote class raster:      ", out_class_file)
-msg("Wrote model:             ", out_model_rds)
-msg("Wrote CV metrics:        ", out_cv_csv)
-msg("Done.")
+terra::writeRaster(AOA$AOA, file.path(aoa_dir, "aoa_mask.tif"), overwrite = TRUE)
+terra::writeRaster(AOA$DI,  file.path(aoa_dir, "aoa_DI.tif"),   overwrite = TRUE)
+terra::writeRaster(AOA$LPD, file.path(aoa_dir, "aoa_LPD.tif"),  overwrite = TRUE)
 
-# Optional: return bundle when sourced interactively (harmless under Rscript)
-invisible(list(
-  ffs = ffs_fit,
-  model = rf_fit,
-  AOA = AOA,
-  DI_error_model = DI_error_model,
-  LPD_error_model = LPD_error_model,
-  prob = prob_r,
-  class = class_r
-))
+saveRDS(list(DI = DI_error_model, LPD = LPD_error_model), file.path(aoa_dir, "aoa_errorProfiles.rds"))
+
+msg("DONE.")

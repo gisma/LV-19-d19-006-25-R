@@ -1,143 +1,260 @@
 ---
-title: "S3 meta — Segmentation and structural spatial units"
+title: "S3 — Structural Space"
+subtitle: "Segmentation and Stability-Controlled Structural Units"
 format:
   html:
     toc: true
-    code-fold: false
+    toc-depth: 3
+    number-sections: true
+  pdf:
+    toc: false
+    number-sections: true
 execute:
   echo: false
   warning: false
   message: false
 ---
+
 # S3: Segmentation and structural spatial units  
-Burgwald decision stack: meta-level description
+Burgwald decision stack — integrated conceptual and operational description
 
-![](îmages/s3.drawio.svg){fig-align="center"}
+![](images/s3.drawio.svg){fig-align="center"}
 
-## Conceptual position of S3
 
-S3 denotes the layer in which spatially explicit raster information is
-transformed into discrete spatial units. These units are not semantic objects
-in the domain sense, but operational structural entities that define coherent
-spatial supports for subsequent aggregation, attribution, and decision logic.
+
+## Role of S3 in the Decision Stack
+
+S3 denotes the layer in which spatially explicit raster information is transformed
+into discrete spatial units. These units are not semantic objects in a domain
+sense, but operational structural entities that define coherent spatial supports
+for aggregation, attribution, and downstream decision logic.
 
 S3 introduces explicit spatial partitioning. Continuous pixel fields are
-converted into labelled regions that are internally homogeneous with respect
-to a selected feature space. The segmentation itself is treated as a structural
+converted into labelled regions that are internally homogeneous with respect to
+a selected feature space. The segmentation itself is treated as a structural
 representation, not as an interpretation of physical or ecological objects.
 
-S3 addresses the following question:
+The guiding question of S3 is:
 
 > How can continuous spatial variability be partitioned into reproducible,
 > spatially coherent units that serve as stable carriers for further analysis?
 
-This layer formalises spatial structure without assigning meaning.
+S3 deliberately excludes semantic interpretation. Derived physical predictors,
+classifications, and observational summaries belong to S2. Signatures and
+aggregated descriptors belong to S4. Learned representations are assigned to
+S4L. Ranking, optimisation, and decision logic belong to S5. Whenever a product
+assigns meaning, aggregates attributes, or supports explicit decisions, it has
+left the S3 domain.
 
----
+Within the Burgwald workflow, S3 fulfils three structural functions. First, it
+provides stable spatial supports for aggregation beyond the pixel scale without
+introducing arbitrary neighbourhood definitions. Second, it externalises spatial
+boundary formation into an explicit, reproducible algorithmic process, improving
+auditability and reducing subjective bias. Third, it provides a geometric
+scaffold for auxiliary methodological purposes, such as stabilising spatial
+cross-validation by grouping samples via persistent segment identifiers.
 
-## Boundary conditions: what S3 explicitly excludes
 
-S3 does not contain derived physical predictors, classifications, or
-observational summaries. These belong to S2. It does not contain semantic
-descriptors, signatures, or aggregated metrics; these belong to S4. It does not
-contain learned representations or embeddings, which are assigned to S4L. It
-does not contain ranking, optimisation, or decision logic, which belong to S5.
 
-S3 units are not assumed to correspond to real-world entities such as stands,
-patches, or management units. Any such interpretation is intentionally deferred
-to higher layers.
+## Construction Principles and Epistemic Framing
 
-Whenever a product assigns semantic meaning, aggregates attributes, or supports
-explicit decisions, it has left the S3 domain.
-
----
-
-## Functional role of S3 in the decision stack
-
-S3 fulfils three structural functions.
-
-First, it provides a stable spatial support for aggregation. Many quantities of
-interest cannot be meaningfully interpreted at the pixel scale alone. S3 units
-define spatial containers over which deterministic signatures and statistics
-can later be computed without introducing arbitrary neighbourhood definitions.
-
-Second, S3 externalises spatial boundary formation. Instead of relying on
-implicit human delineation or ad-hoc buffering, spatial coherence is defined by
-an explicit, reproducible segmentation process. This reduces subjective bias
-and improves auditability.
-
-Third, S3 provides a geometric scaffold for auxiliary processes. Segments may be
-used as annotation infrastructure, for example to stabilise training region
-delineation for pixel-based models. In this role, segments carry geometry but no
-semantics.
-
-In the Burgwald implementation, segments are also used as *grouping units* to
-control spatial leakage in model assessment (e.g. spatial CV folds grouped by
-segment_id). This is a methodological control use of structure, not a semantic
-interpretation of the segments.
-
----
-
-## Construction principles
-
-S3 segmentation is derived exclusively from S2 feature layers. The segmentation
-algorithm operates in a transformed feature s![](images/s2.drawio.svg){fig-align="center"}pace to reduce redundancy and
-improve numerical stability. Dimensionality reduction and standardisation are
-treated as technical preprocessing steps, not as semantic modelling.
+Segmentation in S3 is derived exclusively from S2 feature layers. All
+transformations applied prior to segmentation — standardisation and
+dimensionality reduction — are treated as technical conditioning steps rather
+than as semantic modelling.
 
 Segmentation parameters are not interpreted as physical process scales. Instead,
-parameter selection is treated as an operational control problem and evaluated
-via stability under controlled perturbations. Robustness is prioritised over
-interpretability of individual parameters.
+parameter selection is framed as an operational control problem. The objective is
+to identify parameter regimes that generate internally consistent segmentations,
+are locally robust against small perturbations, remain computationally
+tractable, and provide reproducible structural partitions. This follows a
+general understanding of segmentation as a numerical clustering problem in joint
+spatial–feature space rather than a model of physical object formation, as
+originally formalised in the MeanShift framework[^comaniciu2002] and later adopted
+widely in object-based image analysis and large-scale remote sensing workflows
+[^blaschke2010] [^dragu2014].
 
-Post-conditions are applied explicitly to enforce structural constraints on the
-resulting segmentation, such as minimum region size and topological consistency.
-These constraints are pragmatic and do not imply physical meaning.
+This framing avoids circular justification: segmentation defines structure, and
+structure would otherwise be used to justify segmentation scale. Scale is
+therefore interpreted as a numerical stability property, not as an ontological
+statement about landscape objects or ecological entities.
 
-The final product of S3 is a polygon layer with stable segment identifiers and
-validated geometries.
+Postconditions are applied to enforce basic structural constraints on the
+resulting partition, in particular minimum region size filtering and consistent
+polygonisation of the masked label raster.
 
----
+The final product of S3 is a polygon layer with validated geometries and stable
+segment identifiers that serve purely as structural carriers.
 
-## Product characteristics in the Burgwald context
 
-In Burgwald, segmentation is constructed from a canonical S2 predictor stack via
-explicit technical steps:
 
-- z-score standardisation of the multi-band stack,
-- PCA feature extraction to obtain a compact, de-correlated feature space,
-- multi-scale MeanShift segmentation, screened by local perturbation stability
-  using ARI_prev,
-- explicit postcondition enforcement via size-regime filtering (knee/jump logic)
-  to suppress unstable micro-fragments,
-- polygonisation after masking, geometry validation, AOI clipping, and
-  enforcement of one geometry per segment_id.
+## Segmentation Pipeline and Feature Space Construction
 
-The resulting S3 product is a reproducible structural partition (GPKG) with a
-persistent segment_id field. Segments are used downstream purely as spatial
-supports and control units (aggregation carriers and CV grouping), without
-semantic commitments.
+The segmentation workflow operates on a transformed predictor space to reduce
+numerical dominance effects and redundancy.
 
----
+Each predictor band is standardised to zero mean and unit variance:
 
-## Semantic versus organisational ordering
+$$
+z = \frac{x - \mu}{\sigma}
+$$
 
-S3 defines a semantic layer of structural representation, not a strict temporal
-stage in the processing pipeline. Some downstream products may depend on S3 for
-practical reasons, while some S2 products may operationally be executed after S3
-without changing their semantic classification.
+This ensures comparability across heterogeneous feature sources.
 
-The defining criterion is whether a product represents a spatial partition
-structure rather than a derived measurement or a semantic descriptor.
+Principal Component Analysis is then applied to reduce dimensionality and
+collinearity while preserving dominant variance structure. PCA is used as a
+numerical conditioning step, not as a latent process model. The use of PCA as a
+conditioning step follows standard practice in high-dimensional remote sensing
+pipelines to stabilise distance-based clustering and reduce feature redundancy,
+without implying semantic latent factors or physical interpretability
+[^jolliffe2016].
 
-Maintaining this distinction prevents circular reasoning between structure,
-representation, and decision logic.
+Segmentation is performed using OTB LargeScaleMeanShift in joint spatial–feature
+space. Three parameters jointly control the partition: spatial bandwidth
+(`spatialr`), feature-space bandwidth (`ranger`), and minimum region size
+(`minsize`). These parameters regulate spatial coherence, similarity tolerance,
+and fragment suppression. Their interpretation remains operational rather than
+physical.
 
----
 
-## Contract statement
 
-S3 comprises the explicit spatial partitioning of continuous spatial data into
-reproducible structural units. These units provide stable spatial support for
-aggregation, attribution, and downstream modelling, without carrying inherent
-semantic meaning or decision logic.
+## Stability-Based Parameter Control
+
+For each candidate parameter set, segmentation stability is evaluated through
+local perturbation screening. Rather than validating against external ground
+truth, internal consistency under controlled parameter variation is used as a
+robustness proxy. This operational notion of stability is closely related to
+cluster agreement analysis and resampling-based robustness testing in
+unsupervised learning[^hubert1985] [^benhur2002], and has been applied in spatial
+segmentation contexts to reduce sensitivity to arbitrary scale choices and
+parameter tuning[^grady2012] [^maier2018].
+
+Similarity between baseline and perturbed partitions is quantified using the
+Adjusted Rand Index (ARI), defined as:
+
+$$
+\text{ARI} = \frac{\text{Index} - \text{Expected}}{\text{Max} - \text{Expected}}
+$$
+
+The Adjusted Rand Index corrects raw partition agreement for chance coincidence
+and is widely used for cluster comparison, segmentation benchmarking, and
+robustness analysis in unsupervised settings[^hubert1985] [^steinley2004]. Values
+lie in the range $[-1, 1]$, with $1$ indicating identical partitions.
+
+For a parameter set, let a baseline segmentation be compared against $K$ perturbed
+segmentations. For each perturbation $i \in \{1,\dots,K\}$, define
+
+$$
+\text{ARI}_i = \text{ARI}\!\left(P_0,\; P_i\right),
+$$
+
+where $P_0$ is the baseline partition and $P_i$ is the partition obtained under
+the $i$-th perturbation. Stability is then summarised as
+
+$$
+\text{ARI\_prev} = \frac{1}{K}\sum_{i=1}^{K} \text{ARI}_i
+$$
+
+Here, $K$ denotes the number of evaluated perturbations after removing the
+baseline configuration and applying deterministic subsampling.
+
+
+A composite robustness score penalises unstable configurations:
+
+$$
+\text{score} = \text{ARI\_prev} - 0.5 \cdot \sigma_{\text{ARI}}
+$$
+with:
+$$
+\qquad
+\sigma_{\text{ARI}} = \sqrt{\frac{1}{K-1}\sum_{i=1}^{K}\left(\text{ARI}_i-\text{ARI\_prev}\right)^2 }.
+$$
+The perturbations are generated adaptively around the given base parameter triple:
+
+$$
+s = \text{spatialr}, \quad r = \text{ranger}, \quad m = \text{minsize}.
+$$
+
+Spatial perturbations apply:
+
+$s \pm 1$ when $s > 3$. 
+
+Range perturbations follow:
+
+$\Delta r = \max(0.005,\; 0.10 \cdot r)$ and 
+
+MinSize perturbations follow: 
+
+$\Delta m = \max(5,\; 0.20 \cdot m), \qquad m_{\text{min}} \ge 0.8 \cdot m.$
+
+Candidate perturbations are generated combinatorially and the baseline
+configuration is removed. To keep runtime bounded, the resulting set is reduced
+to a fixed maximum size by subsampling with a fixed random seed, ensuring
+run-to-run reproducibility under identical configuration.
+
+To keep memory usage bounded and runtime predictable, ARI is computed on paired
+label value vectors derived from a fixed-size pixel sample. Label rasters may
+optionally be spatially downsampled using nearest-neighbour resampling via the
+configurable sampling factor `fac`; `fac = 1` preserves the original resolution,
+while fac > 1 activates deterministic spatial downsampling for large domains.
+In all cases, materialisation of large intermediate raster tables is avoided.
+
+
+## Interpretation, Contract, and Limitations
+
+S3 always depends on the availability of at least one S2 feature layer, since a
+segmentation cannot be computed without a feature representation. In this
+sense, S3 is operationally downstream of S2. However, the assignment of products
+to S-layers is not identical to their execution order in the workflow: some S2
+products may be generated later for practical reasons without changing their
+classification. The defining criterion remains whether a product represents a
+spatial partition or a derived measurement or descriptor.
+
+**Contract statement.**  
+
+>S3 generates a reproducible spatial partition from continuous raster data. The
+resulting segments are used as stable spatial units for aggregation and further
+processing, but do not carry semantic labels, rankings, or decision logic.
+
+
+The main limitation of the S3 approach lies in the dependence of the segmentation
+on scale selection and feature-space parametrisation. Different choices of
+spatial scale, feature composition, and bandwidth parameters can lead to
+different partitions, even when stability screening is applied. Stability
+reduces sensitivity to small perturbations, but it does not eliminate structural
+dependence on modelling choices.
+
+ARI provides only a coarse measure of partition agreement and is insensitive to
+spatial morphology and topology. Feature-space bandwidth calibration remains
+empirical, and MeanShift segmentation remains sensitive to feature engineering.
+These limitations reflect a general property of spatial partitioning: segment
+boundaries are method-dependent rather than intrinsic properties of the
+landscape, a problem closely related to scale effects and the modifiable areal
+unit problem[^openshaw1984] [^woodcock1997].
+
+
+
+
+[^comaniciu2002]: Comaniciu, D., & Meer, P. (2002). *Mean Shift: A robust approach toward feature space analysis.* IEEE Transactions on Pattern Analysis and Machine Intelligence.
+
+[^blaschke2010]: Blaschke, T. (2010). Object based image analysis for remote sensing. *ISPRS Journal of Photogrammetry and Remote Sensing*, 65(1), 2–16.
+
+[^dragu2014]: Drăguţ, L., Csillik, O., Eisank, C., & Tiede, D. (2014). Automated parameterisation for multi-scale image segmentation on multiple layers. *ISPRS Journal of Photogrammetry and Remote Sensing*, 88, 119–127.
+
+[^jolliffe2016]: Jolliffe, I., & Cadima, J. (2016). Principal component analysis: a review and recent developments. *Philosophical Transactions of the Royal Society A*, 374.
+
+[^hubert1985]: Hubert, L., & Arabie, P. (1985). Comparing partitions. *Journal of Classification*, 2(1), 193–218.
+
+[^benhur2002]: Ben-Hur, A., Elisseeff, A., & Guyon, I. (2002). A stability based method for discovering structure in clustered data. *Pacific Symposium on Biocomputing*.
+
+[^grady2012]: Grady, L., & Funka-Lea, G. (2012). Multi-label image segmentation for medical applications based on graph-theoretic electrical potentials. *IEEE Transactions on Medical Imaging*, 31(3), 519–529.
+
+[^maier2018]: Maier, S. W., et al. (2018). Scale optimisation in object-based image analysis. *Remote Sensing*, 10(8).
+
+[^steinley2004]: Steinley, D. (2004). Properties of the Hubert–Arabie adjusted Rand index. *Psychological Methods*, 9(3), 386–396.
+
+[^hay2005]: Hay, G. J., & Castilla, G. (2005). Object-based image analysis: strengths, weaknesses, opportunities and threats. *OBIA Conference Proceedings*.
+
+[^openshaw1984]: Openshaw, S. (1984). *The Modifiable Areal Unit Problem*. Geo Books.
+
+[^woodcock1997]: Woodcock, C. E., & Strahler, A. H. (1997). The factor of scale in remote sensing. *Remote Sensing of Environment*, 21(3), 311–332.

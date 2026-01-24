@@ -1,116 +1,110 @@
 S	key	topic	ext
 # =========================================================
-# S1 — Base observations
+# Canonical outputs registry (sorted by S-level)
+# Columns are TAB-separated: S <tab> key <tab> topic <tab> ext [<tab># comment]
 # =========================================================
+
+# =========================================================
+# S1_observation
+# =========================================================
+# --- landcover ---
+S1_observation	aoi_clc	landcover	tif	# S4_cover (fallback)
+S1_observation	gt_points_lc	landcover	gpkg
+# --- osm ---
+S1_observation	osm_by_key	osm	dir
+# --- predictors ---
+S1_observation	cdse_pred_stack	predictors	tif
+# --- topography ---
 S1_observation	aoi_dgm	topography	tif	# S4_physio
 S1_observation	aoi_dom	topography	tif	# S4_physio
-S1_observation	aoi_clc	landcover	tif	# S4_cover (fallback)
-
-# manual ground-truth points for pixel classification (segment-based label propagation)
-S1_observation    gt_points_lc    landcover    gpkg    
+# --- training ---
+S1_observation	training_polygons	training	gpkg
 
 # =========================================================
-# S2 — Classification / landcover
+# S2_features
 # =========================================================
+# --- classification ---
+S2_features	classification_kmeans	classification	tif
+S2_features	classification_mlc	classification	tif
 S2_features	classification_rf	classification	tif	# S4_it,S4_cover
-
-# =========================================================
-# S2 — Wind forcing
-# =========================================================
+S2_features	classification_rf_confusion	classification	rds
+S2_features	classification_rf_model	classification	rds
+S2_features	s2_lc_rf_trainpts_2021	classification	gpkg
+# --- features ---
+S2_features	s2_pred_stack_2021_rf	features	tif
+S2_features	train_seg_rds	features	rds
+S2_features	layer0_segments_clc_supervised	features	gpkg
+# --- figures ---
+S2_features	windrose_all_by_station	figures	png
+S2_features	windrose_all_combined	figures	png
+S2_features	windrose_all_panel	figures	png
+S2_features	windrose_buf_by_station	figures	png
+S2_features	windrose_buf_combined	figures	png
+S2_features	windrose_buf_mean_season	figures	png
+S2_features	windrose_buf_panel	figures	png
+# --- forcing ---
+S2_features	dir_table_by_station_all	forcing	rds
+S2_features	dir_table_by_station_buf	forcing	rds
+S2_features	dir_table_overall_all	forcing	rds
+S2_features	dir_table_overall_buf	forcing	rds
+S2_features	overall_summary_all	forcing	rds
+S2_features	overall_summary_buf	forcing	rds
+S2_features	station_summary_all	forcing	rds
+S2_features	station_summary_buf	forcing	rds
+S2_features	wind_buf_mean_ts	forcing	rds
+S2_features	wind_for_openair_all	forcing	rds
+S2_features	wind_for_openair_buf	forcing	rds
 S2_features	wind_means_summary	forcing	rds	# S4_physio
-
-# =========================================================
-# S2 — Hydrology
-# =========================================================
-S2_features	watershed_id_10m	hydrology	tif	# S4_hydro
-S2_features	strahler_order_10m	hydrology	tif	# S4_hydro
-S2_features	flowacc_10m	hydrology	tif	# S4_hydro
+# --- hydrology ---
 S2_features	dist_to_stream_10m	hydrology	tif	# S4_hydro
-
-# =========================================================
-# S2 — Vegetation structure
-# =========================================================
-S2_features	chm_mean_10m	structure	tif	# S4_bio
-S2_features	chm_p95_10m	structure	tif	# S4_bio
-S2_features	chm_sd_10m	structure	tif	# S4_bio
-S2_features	canopy_fraction_10m	structure	tif	# S4_bio
-
+S2_features	flowacc_10m	hydrology	tif	# S4_hydro
+S2_features	hydro_stack_10m	hydrology	tif
+S2_features	hydrology_vectors_10m	hydrology	gpkg
+S2_features	strahler_order_10m	hydrology	tif	# S4_hydro
+S2_features	watershed_id_10m	hydrology	tif	# S4_hydro
+# --- remote_sensing ---
+S2_features	s2_cube_monthly_2018_2022	remote_sensing	nc
+S2_features	s2_gdalcubes_cube_2018_2022_all	remote_sensing	nc
+S2_features	s2_kndvi_mean_2018_2022	remote_sensing	tif
 S2_features	s2_pred_stack_2018	remote_sensing	tif
 S2_features	s2_pred_stack_2019	remote_sensing	tif
 S2_features	s2_pred_stack_2020	remote_sensing	tif
 S2_features	s2_pred_stack_2021	remote_sensing	tif
 S2_features	s2_pred_stack_2022	remote_sensing	tif
-S2_features	s2_pred_stack_2021_rf	features	tif
-
-# =========================================================
-# ADDITIONS (merge) — missing items from your new list
-# =========================================================
-
-# --- S1 observation contracts (add) ---
-S1_observation	osm_by_key	osm	dir
-S1_observation	cdse_pred_stack	predictors	tif
-S1_observation	training_polygons	training	gpkg
-
-# --- S2 wind forcing (add) ---
-S2_features	wind_for_openair_all	forcing	rds
-S2_features	wind_for_openair_buf	forcing	rds
-S2_features	overall_summary_all	forcing	rds
-S2_features	station_summary_all	forcing	rds
-S2_features	dir_table_overall_all	forcing	rds
-S2_features	dir_table_by_station_all	forcing	rds
-S2_features	overall_summary_buf	forcing	rds
-S2_features	station_summary_buf	forcing	rds
-S2_features	dir_table_overall_buf	forcing	rds
-S2_features	dir_table_by_station_buf	forcing	rds
-S2_features	wind_buf_mean_ts	forcing	rds
-S2_features	windrose_all_combined	figures	png
-S2_features	windrose_all_by_station	figures	png
-S2_features	windrose_all_panel	figures	png
-S2_features	windrose_buf_combined	figures	png
-S2_features	windrose_buf_by_station	figures	png
-S2_features	windrose_buf_panel	figures	png
-S2_features	windrose_buf_mean_season	figures	png
-
-# --- S2 classification / landcover (add) ---
-S2_features	classification_kmeans	classification	tif
-S2_features	classification_mlc	classification	tif
-S2_features	classification_rf_model	classification	rds
-S2_features	classification_rf_confusion	classification	rds
-
-S2_features	s2_lc_rf_2021	classification	tif
-S2_features	s2_lc_rf_prob_2021	classification	tif
-S2_features	s2_lc_rf_model_2021	classification	rds
-S2_features	s2_lc_rf_cv_metrics_2021	classification	csv
-S2_features	s2_lc_rf_trainpts_2021	classification	gpkg
-# --- S2 remote sensing (add) ---
-
-S2_features	s2_gdalcubes_cube_2018_2022_all	remote_sensing	nc
-S2_features	s2_kndvi_mean_2018_2022	remote_sensing	tif
-S2_features	s2_cube_monthly_2018_2022	remote_sensing	nc
-
-# --- S2 topography (add) ---
+# --- structure ---
+S2_features	canopy_fraction_10m	structure	tif	# S4_bio
+S2_features	chm_mean_10m	structure	tif	# S4_bio
+S2_features	chm_p95_10m	structure	tif	# S4_bio
+S2_features	chm_sd_10m	structure	tif	# S4_bio
+S2_features	biostructure_stack_10m	structure	tif
+# --- topography ---
 S2_features	relief_stack_10m	topography	tif
-S2_features    hydro_stack_10m    hydrology    tif
-S2_features	hydrology_vectors_10m	hydrology	gpkg
 
-
-# --- S3 structure products (add) ---
-S3_structure	s2_bfast_kndvi_results	remote_sensing	nc
-S3_structure	layer0_zscore_stack	features	tif
+# =========================================================
+# S3_structure
+# =========================================================
+# --- features ---
 S3_structure	layer0_pca_features	features	tif
+S3_structure	layer0_zscore_stack	features	tif
+# --- metrics ---
 S3_structure	layer0_meanshift_metrics	metrics	csv
-
-# =========================================================
-# S3 — Segmentation products
-# =========================================================
+# --- remote_sensing ---
+S3_structure	s2_bfast_kndvi_results	remote_sensing	nc
+# --- segments ---
 S3_structure	layer0_segments	segments	gpkg	# S4_it,S4_physio,S4_hydro,S4_cover,S4_bio,S4_join
 
 # =========================================================
-# S4 — Signatures (outputs → join → S5)
+# S4_signatures
 # =========================================================
+# --- signatures ---
+S4_signatures	layer0_attr_biostructure_metrics	signatures	gpkg	# S4_join
+S4_signatures	layer0_attr_cover_metrics	signatures	gpkg	# S4_join
+S4_signatures	layer0_attr_hydro_metrics	signatures	gpkg	# S4_join
 S4_signatures	layer0_attr_it_metrics	signatures	gpkg	# S4_join
 S4_signatures	layer0_attr_physio_metrics	signatures	gpkg	# S4_join
-S4_signatures	layer0_attr_hydro_metrics	signatures	gpkg	# S4_join
-S4_signatures	layer0_attr_cover_metrics	signatures	gpkg	# S4_join
-S4_signatures	layer0_attr_biostructure_metrics	signatures	gpkg	# S4_join
 S4_signatures	layer0_segments_attrstack_metrics	signatures	gpkg	# S5
+
+S4_signatures	s4_lc_rf_2021	classification	tif
+S4_signatures	s4_lc_rf_cv_metrics_2021	classification	csv
+S4_signatures	s4_lc_rf_model_2021	classification	rds
+S4_signatures	s4_lc_rf_prob_2021	classification	tif

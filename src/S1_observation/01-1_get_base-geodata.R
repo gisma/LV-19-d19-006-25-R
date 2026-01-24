@@ -18,6 +18,7 @@ source("src/_core/01-setup-burgwald.R")
 ############################################################
 
 dem_out_file <- paths[["aoi_dgm"]]
+clc_out_file =  paths[["train_seg_rds"]]
 
 run_if_missing(dem_out_file, {
   
@@ -191,6 +192,7 @@ run_if_missing(clc_out_file, {
   
   unzip(zipname, exdir = here::here("data", "raw"))
   
+  
   data_dir <- here::here(
     "data", "raw",
     "u2018_clc2018_v2020_20u1_raster100m", "DATA"
@@ -198,11 +200,17 @@ run_if_missing(clc_out_file, {
   
   clc_tif <- dir(data_dir, pattern = "\\.tif$", full.names = TRUE)[1]
   clc_rast <- terra::rast(clc_tif)
+  rcl <- as.matrix(clc_legend[, c("class_id", "code")])
   
-  aoi_clc   <- sf::st_transform(aoi_burgwald_wgs, terra::crs(clc_rast))
+  # 2) Apply: 1..44 -> code; everything else (incl. 45=NODATA) -> NA
+  clc_code_rast <- terra::classify(clc_rast, rcl = rcl, others = NA)
+  
+  names(clc_code_rast) <- "CLC3"
+  
+  aoi_clc   <- sf::st_transform(aoi_burgwald_wgs, terra::crs(clc_code_rast))
   aoi_clc_v <- terra::vect(aoi_clc)
   
-  clc_crop <- clc_rast |>
+  clc_crop <- clc_code_rast |>
     terra::crop(aoi_clc_v) |>
     terra::mask(aoi_clc_v)
   

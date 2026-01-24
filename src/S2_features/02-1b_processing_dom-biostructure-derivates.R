@@ -49,6 +49,7 @@ out_chm_mean_10m <- paths[["chm_mean_10m"]]
 out_chm_p95_10m  <- paths[["chm_p95_10m"]]
 out_chm_sd_10m   <- paths[["chm_sd_10m"]]
 out_canfrac_10m  <- paths[["canopy_fraction_10m"]]
+out_3dstruc_10m  <- paths[["biostructure_stack_10m"]]
 
 dir.create(dirname(out_chm_mean_10m), recursive = TRUE, showWarnings = FALSE)
 dir.create(dirname(out_chm_p95_10m),  recursive = TRUE, showWarnings = FALSE)
@@ -123,7 +124,12 @@ terra::writeRaster(chm_p95_10m,         out_chm_p95_10m,  overwrite = TRUE)
 terra::writeRaster(chm_sd_10m,          out_chm_sd_10m,   overwrite = TRUE)
 terra::writeRaster(canopy_fraction_10m, out_canfrac_10m,  overwrite = TRUE)
 
+r = c(chm_mean_10m,chm_p95_10m,chm_sd_10m, canopy_fraction_10m)
+names(r) = c("chm_mean_10m","chm_p95_10m","chm_sd_10m", "canopy_frac_10m")
+terra::writeRaster(r, out_3dstruc_10m,  overwrite = TRUE)
+
 message("Wrote: ", out_chm_mean_10m)
 message("Wrote: ", out_chm_p95_10m)
 message("Wrote: ", out_chm_sd_10m)
 message("Wrote: ", out_canfrac_10m)
+message("Wrote: ", out_3dstruc_10m)
