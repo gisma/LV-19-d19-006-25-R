@@ -1,6 +1,8 @@
 ---
 title: "S4 — Signatures as Explicit Structural Representations"
 subtitle: "Burgwald Decision Stack — Reader"
+author: Chris Reudenbach
+date: '2026-01-24'
 format:
   html:
     toc: true

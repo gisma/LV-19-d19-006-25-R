@@ -1,6 +1,8 @@
 ---
 title: "S3 — Structural Space"
 subtitle: "Segmentation and Stability-Controlled Structural Units"
+author: Chris Reudenbach
+date: '2026-01-24'
 format:
   html:
     toc: true

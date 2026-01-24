@@ -1,10 +1,15 @@
 ---
 title: "S4 - Segment-based CLC Supervision and RF Classification on Sentinel Signatures"
+author: Chris Reudenbach
+date: '2026-01-24'
 format:
   html:
     toc: true
     toc-depth: 3
     number-sections: true
+  pdf:
+    toc: false
+    number-sections: true     
 execute:
   echo: false
   warning: false

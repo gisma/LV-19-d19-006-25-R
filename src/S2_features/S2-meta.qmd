@@ -1,12 +1,16 @@
 ---
 title: "S2 — Derived Fields, Structural Representations and Operational Semantics"
 subtitle: "Burgwald Decision Stack — Reader"
-
+author: Chris Reudenbach
+date: '2026-01-24'
 format:
   html:
     toc: true
     code-fold: false
     theme: default
+  pdf:
+    toc: false
+    number-sections: false
 execute:
   echo: false
   warning: false
@@ -17,7 +21,6 @@ execute:
 
 Burgwald decision stack: meta-level description
 
-![](images/s2.drawio.svg){fig-align="center"}
 
 
 ## 1. Why S2 Exists at All
@@ -40,7 +43,7 @@ A useful mental model is:
 S1 answers *“What did we measure?”*  
 S2 answers *“How do we represent this measurement as spatial structure?”*
 
----
+
 
 ## 2. What “Representation” Means in This Context
 
@@ -64,7 +67,7 @@ These representations are **constructed quantities**. They encode design decisio
 
 Crucially, S2 representations are still *pre-semantic*. They describe structure, magnitude, variability or signal behaviour, but they do not yet say what something *is*. Semantics enter only later, either through explicit supervision (S2-5) or through learned representations (S4L).
 
----
+
 
 ## 3. Structural Overview of the Current S2 Pipeline
 
@@ -82,7 +85,7 @@ This heterogeneity is intentional. Landscape modelling requires multiple represe
 
 The unifying principle is not data type, but **epistemic function**: each pipeline produces a representation that captures a specific aspect of spatial reality under explicit assumptions.
 
----
+
 
 ## 4. S2-1 — Terrain and Hydrological Structure from DEM
 
@@ -110,7 +113,7 @@ Again, these are not hydrodynamic simulations. They represent topological struct
 
 Taken together, S2-1 constructs a **structural geometry layer of the landscape**: static, deterministic, scale-defined and fully interpretable.¹
 
----
+
 
 ## 5. S2-2 — Vegetation Biostructure from Surface and Ground Models
 
@@ -120,9 +123,9 @@ DOM and DEM provide absolute height measurements of surface and ground. Their di
 
 The differential canopy height model is defined as:
 
-\[
+$$
 \mathrm{dCHM}(x,y) = \max\bigl(0,\; \mathrm{DOM}(x,y) - \mathrm{DEM}(x,y)\bigr)
-\]
+$$
 
 Negative values are explicitly clipped to zero. This is a semantic decision: negative canopy height has no physical interpretation and represents artefacts rather than signal.
 
@@ -136,10 +139,10 @@ For each 10 m cell, four descriptors are computed: mean height, 95th percentile 
 
 Formally, canopy fraction is defined as:
 
-\[
+$$
 f_{\mathrm{canopy}} = \frac{1}{N} \sum_{i=1}^{N} \mathbf{1}\bigl(\mathrm{dCHM}_i > h_{\mathrm{thr}}\bigr),
 \quad h_{\mathrm{thr}} = 2\,\mathrm{m}.
-\]
+$$
 
 ### 5.3 Epistemic Role
 
@@ -147,7 +150,7 @@ These fields do not represent species, biomass or ecological state. They represe
 
 In later stages, they act as explanatory variables for segmentation and signature formation rather than as direct ecological indicators.²
 
----
+
 
 ## 6. S2-3 — Atmospheric Context from DWD Wind Observations
 
@@ -161,7 +164,7 @@ The epistemic function of this pipeline is **contextualization**. It characteriz
 
 S2-3 therefore intentionally remains orthogonal to the spatial modelling chain.³
 
----
+
 
 ## 7. S2-4 — Temporal Disturbance Signals from Satellite Time Series
 
@@ -169,10 +172,10 @@ S2-4 introduces temporal structure into S2.
 
 For each pixel of a Sentinel-2 data cube, a vegetation index time series is derived. NDVI is transformed into kNDVI to stabilize variance and reduce saturation effects:
 
-\[
+$$
 \mathrm{NDVI} = \frac{NIR - RED}{NIR + RED}, \qquad
 \mathrm{kNDVI} = \tanh(\mathrm{NDVI}^2).
-\]
+$$
 
 The kNDVI time series is analysed using `bfastmonitor` to detect structural breaks. Two quantities are retained:
 
@@ -183,7 +186,7 @@ These are not labels of disturbance types. They are **signal descriptors** indic
 
 This pipeline introduces a dynamic dimension into S2 while preserving the principle of non-inference.⁴
 
----
+
 
 ## 8. S2-5 — Semantic Anchoring via Supervision Transfer
 
@@ -193,9 +196,9 @@ A categorical land-cover raster is intersected with segmentation polygons. For e
 
 The dominant class share defines the segment’s purity:
 
-\[
+$$
 \mathrm{purity} = \max_k(\mathrm{share}_k).
-\]
+$$
 
 Segments below minimum purity or minimum area thresholds are excluded from training data generation. For the remaining segments, predictor means are attached to form a training matrix.
 
@@ -203,7 +206,7 @@ Two artefacts are produced: a fully annotated segment layer for diagnostics and 
 
 This step is epistemically sensitive. It embeds assumptions about class geometry, scale compatibility and label noise. It must therefore remain transparent and adjustable. S2-5 does not claim semantic truth; it provides **operationally usable supervision under explicit constraints**.⁵
 
----
+
 
 ## 9. Conceptual Synthesis
 
@@ -221,12 +224,6 @@ The unifying principle is not algorithmic similarity, but epistemic clarity: eac
 
 S2 therefore establishes the representational foundation upon which the higher abstraction levels of the Burgwald architecture operate.
 
----
 
-## References
 
-[^1]: Wilson, J. P., & Gallant, J. C. (2000). *Terrain Analysis: Principles and Applications*. Wiley.  
-[^2]: Lefsky, M. A. et al. (2002). Lidar remote sensing for ecosystem studies. *BioScience*.  
-[^3]: WMO (2018). *Guide to Meteorological Instruments and Methods of Observation*.  
-[^4]: Verbesselt, J. et al. (2010). Detecting trend and seasonal changes in satellite image time series. *Remote Sensing of Environment*.  
-[^5]: Olofsson, P. et al. (2014). Good practices for estimating area and assessing accuracy of land change. *Remote Sensing of Environment*.
+
