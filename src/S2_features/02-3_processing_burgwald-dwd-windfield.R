@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 #######################################################################
-# Script:   03-1_analysis_burgwald-dwd-wind-rose.R
+# Script:   02-3_processing_burgwald-dwd-windfield
 # Project:  Burgwald
 #
 # CONTENT + TECHNICAL OVERVIEW (ENGLISH)
@@ -150,16 +150,16 @@ wind_df <- bind_rows(wind_list)
 # -------------------------------------------------------------------
 # IMPORTANT: Harmonize DWD geo metadata column names
 # -------------------------------------------------------------------
-# You observed that the geo metadata uses these column labels:
-#   "Stations_id", "Geogr.Breite", "Geogr.Laenge", "Stationsname", ...
-# while the wind product uses "STATIONS_ID" as ID.
+# Motivation:
+# - The wind product tables contain station ID as "STATIONS_ID".
+# - The geo metadata tables often contain station ID as "Stations_id"
+#   and coordinate columns as "Geogr.Breite" / "Geogr.Laenge".
 #
-# We therefore rename columns to a canonical set:
-#   STATIONS_ID, geoBreite, geoLaenge
-#
-# This is a strictly necessary fix (not a "safeguard"):
-# Without this rename, the station metadata cannot be joined to wind_df
-# and any spatial filtering (buffer selection) will be impossible.
+# Without the rename() below, the join between wind_df and station_geo will fail.
+# That would break:
+# - creation of stations_sf
+# - creation of wind_raw sf table
+# - AOI-buffer filtering (inside_idx)
 station_geo <- bind_rows(station_geo_list) %>%
   rename(
     STATIONS_ID = Stations_id,
@@ -169,12 +169,12 @@ station_geo <- bind_rows(station_geo_list) %>%
   distinct(STATIONS_ID, .keep_all = TRUE)
 
 # Parse datetime from DWD field MESS_DATUM (hourly timestamp encoded as YYYYMMDDHH).
-# This makes the time axis compatible with openair.
+# tz="UTC" is used here to avoid implicit local timezone assumptions in summaries/plots.
 wind_df <- wind_df %>%
   mutate(datetime = lubridate::ymd_h(as.character(MESS_DATUM), tz = "UTC"))
 
 # Convert station geo table to sf points (WGS84 lon/lat).
-# Coordinates are kept as numeric and used as geometry.
+# Note: geoBreite/geoLaenge are retained as numeric columns AND used for geometry.
 stations_sf <- station_geo %>%
   transmute(
     STATIONS_ID  = STATIONS_ID,
@@ -185,12 +185,15 @@ stations_sf <- station_geo %>%
   st_as_sf(coords = c("geoLaenge", "geoBreite"), crs = 4326, remove = FALSE)
 
 # Join measurements with station attributes and geometry.
-# This yields an sf object with one geometry per measurement row (replicated per station).
+# Result: an sf object (EPSG:4326) where each measurement row carries the station geometry.
+# This is intentionally denormalized (many rows per station) because later filtering
+# uses st_within on the measurement points (effectively station membership replicated).
 wind_raw <- wind_df %>%
   left_join(st_drop_geometry(stations_sf), by = "STATIONS_ID") %>%
   left_join(stations_sf %>% select(STATIONS_ID, geometry), by = "STATIONS_ID") %>%
   st_as_sf(crs = 4326)
 
+# Quick reporting: station IDs and names observed in the ZIP collection.
 message("Stations in RAW wind ZIPs (STATIONS_ID):")
 print(unique(wind_raw$STATIONS_ID))
 message("Stations in RAW wind ZIPs (Stationsname):")
@@ -200,7 +203,7 @@ print(unique(wind_raw$Stationsname))
 ## 2) Helper: circular mean for wind direction (degrees)
 ## -------------------------------------------------------------------
 # Wind direction is circular (0° == 360°). A linear mean is wrong.
-# We compute the circular mean using sin/cos components and atan2.
+# This function returns a mean direction in [0, 360).
 mean_wdir_deg <- function(wd_deg) {
   theta <- wd_deg * pi / 180
   sin_mean <- mean(sin(theta), na.rm = TRUE)
@@ -211,6 +214,7 @@ mean_wdir_deg <- function(wd_deg) {
 }
 
 # Direction bins used for frequency tables (30-degree sectors).
+# Used in A5/B6 for direction-frequency tables.
 dir_breaks <- seq(0, 360, by = 30)
 
 ## ===================================================================
@@ -220,13 +224,15 @@ dir_breaks <- seq(0, 360, by = 30)
 ## -------------------------------------------------------------------
 ## A1) Prepare openair input table (all stations)
 ## -------------------------------------------------------------------
-# openair::windRose() expects:
-# - a column for datetime (often named "date")
-# - wind speed column (ws)
-# - wind direction column (wd)
-# - optionally a grouping/faceting column (station)
+# openair::windRose expects:
+# - date: datetime
+# - ws: wind speed
+# - wd: wind direction
+# - optional: station grouping
 #
-# We produce a plain data.frame/tibble without geometry for plotting.
+# Mapping from DWD product columns:
+# - F (wind speed) -> ws
+# - D (wind direction) -> wd
 wind_for_openair_all <- wind_raw %>%
   st_drop_geometry() %>%
   transmute(
@@ -236,11 +242,13 @@ wind_for_openair_all <- wind_raw %>%
     station = Stationsname
   ) %>%
   filter(!is.na(ws), !is.na(wd))
+
+# Explicit iconv: ensure station labels are valid UTF-8 for plotting and stable RDS.
 wind_for_openair_all <- wind_for_openair_all %>%
   mutate(station = iconv(station, from = "", to = "UTF-8", sub = ""))
 
-
 # Persist the prepared table as an artefact (S2).
+# This is the canonical "openair-ready" input (all stations).
 saveRDS(wind_for_openair_all, paths[["wind_for_openair_all"]])
 
 ## -------------------------------------------------------------------
@@ -297,10 +305,15 @@ dev.off()
 ## -------------------------------------------------------------------
 ## A5) Tabular summaries for ALL stations (RDS artefacts)
 ## -------------------------------------------------------------------
-# We create:
-# - overall mean wind speed and circular mean direction
-# - per-station mean wind speed and direction
-# - direction frequency tables overall and per station
+# This block derives:
+# - overall mean ws and circular mean wd (across all stations)
+# - per-station mean ws and circular mean wd
+# - direction frequency (overall and per station) in 30° bins
+#
+# These tables are typically used to:
+# - document prevailing wind regimes (direction + speed)
+# - check consistency between stations
+# - support later decisions for windwardness descriptors / stratification
 
 overall_summary_all <- wind_for_openair_all %>%
   summarise(
@@ -345,19 +358,17 @@ saveRDS(dir_table_by_station_all, paths[["dir_table_by_station_all"]])
 ## -------------------------------------------------------------------
 ## B1) Compute 20 km buffer in a metric CRS and spatially filter stations
 ## -------------------------------------------------------------------
-# The AOI is in WGS84. Buffer distances must be computed in meters, so
-# we transform to EPSG:25832 (ETRS89 / UTM zone 32N) before buffering.
+# Rationale:
+# - Buffer distances must be computed in meters => switch from EPSG:4326 to EPSG:25832.
+# - wind_raw contains station geometry replicated per measurement row.
+# - inside_idx flags those measurement rows whose station point lies within the buffer.
 burgwald_buf_m <- st_transform(aoi_burgwald_wgs, 25832) %>%
   st_buffer(dist = 20000)
 
-# Transform wind points to same metric CRS for the spatial predicate.
 wind_raw_m <- st_transform(wind_raw, 25832)
 
-# Identify which measurement points lie inside the buffer polygon.
-# This returns a logical matrix (n_points x n_polygons); we have 1 polygon.
 inside_idx <- st_within(wind_raw_m, burgwald_buf_m, sparse = FALSE)[, 1]
 
-# Subset the sf table to buffer-only records.
 wind_burgwald_sf <- wind_raw[inside_idx, ]
 
 message("Stations inside Burgwald buffer (STATIONS_ID):")
@@ -368,7 +379,7 @@ print(unique(wind_burgwald_sf$Stationsname))
 ## -------------------------------------------------------------------
 ## B2) Prepare openair input table (buffer-only)
 ## -------------------------------------------------------------------
-
+# Same mapping as A1, but restricted to the buffer subset.
 wind_for_openair_buf <- wind_burgwald_sf %>%
   st_drop_geometry() %>%
   transmute(
@@ -474,15 +485,13 @@ saveRDS(dir_table_by_station_buf, paths[["dir_table_by_station_buf"]])
 ## -------------------------------------------------------------------
 ## B7) Buffer-mean time series and seasonal split
 ## -------------------------------------------------------------------
-# This produces a "spatial mean" time series over all buffer stations.
-# For each timestamp, we compute:
-# - mean wind speed (linear mean)
-# - mean wind direction (circular mean)
-# and label each record as summer or winter based on month.
+# This creates a "buffer-mean" series:
+# - For each timestamp, average ws across stations (linear mean)
+# - For each timestamp, average wd across stations (circular mean)
 #
-# Summer: Apr–Sep (months 4:9)
-# Winter: Oct–Mar (months 10:12 and 1:3)
-
+# season2 rule (fixed):
+# - Summer: Apr–Sep
+# - Winter: Oct–Mar
 wind_buf_season <- wind_for_openair_buf %>%
   mutate(
     month = lubridate::month(date),
@@ -519,7 +528,8 @@ dev.off()
 ## -------------------------------------------------------------------
 ## B9) Seasonal + annual mean wind table from buffer-mean series (RDS)
 ## -------------------------------------------------------------------
-
+# These means are computed on the *buffer-mean* series (not on raw station rows),
+# i.e. each timestamp has equal weight after the within-timestamp averaging in B7.
 summer_mean_wind <- wind_buf_mean_ts %>%
   filter(season2 == "Summer (Apr–Sep)") %>%
   summarise(
@@ -550,4 +560,3 @@ wind_means_summary <- tibble::tibble(
 )
 
 saveRDS(wind_means_summary, paths[["wind_means_summary"]])
-

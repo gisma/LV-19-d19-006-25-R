@@ -1,5 +1,7 @@
 ---
-title: "S2 meta — Derived raster and observation products"
+title: "S2 — Derived Fields, Structural Representations and Operational Semantics"
+subtitle: "Burgwald Decision Stack — Reader"
+
 format:
   html:
     toc: true
@@ -17,66 +19,214 @@ Burgwald decision stack: meta-level description
 
 ![](images/s2.drawio.svg){fig-align="center"}
 
-## Conceptual position of S2
 
-S2 denotes the layer of spatially explicit products that are derived directly from observations (S1) and remain defined on the native spatial support of the measurement system. For raster data, this is pixels; for in-situ networks, it is stations.
+## 1. Why S2 Exists at All
 
-S2 artefacts are transformations of measurements, not abstractions of spatial objects. They preserve physical or statistical interpretability and remain anchored in the observational domain. Typical S2 products include raster layers, per-pixel indices, pixel-wise classifications, probability fields and descriptive station summaries.
+In the Burgwald architecture, S2 marks the first step where *data becomes representation*.
 
-S2 addresses a specific yet fundamental question:
+S1 organizes observations: satellite images, digital elevation models, station measurements, provider formats, spatial reference systems, temporal indexing. At that level, the system is still epistemically passive. It stores, harmonizes and validates input material, but it does not yet impose any explicit interpretation on what the data *means* in relation to landscape structure, processes or modelling goals.
 
-> What can be derived directly from measurements in space and time, before any segmentation, object formation or decision logic is introduced?
+S2 changes that status fundamentally. Here, raw observations are transformed into **explicitly constructed fields that encode assumptions about space, structure, scale and relevance**. These transformations are not neutral. Each derived layer embodies a decision about what aspects of reality are considered stable, meaningful, measurable and reusable for later modelling stages.
 
-This restriction is intentional. It prevents premature semantic commitments and keeps uncertainty and scale effects explicit.
+At the same time, S2 deliberately avoids three things:
 
-## Boundary conditions: what S2 explicitly excludes
+1. It does not perform classification or decision-making.  
+2. It does not learn from data in a statistical sense.  
+3. It does not optimize towards downstream targets.
 
-S2 does not contain spatial objects, segmentations or region abstractions. These belong to S3. It also excludes aggregated signatures or descriptors of objects, which belong to S4. Similarly, it does not contain learned representations or embeddings, which are assigned to S4L. It also excludes ranking, selection, optimisation and policy logic, which belong to S5.
+S2 therefore sits between *measurement* and *inference*. It produces representations that are meant to be interpretable, reproducible and epistemically conservative. The purpose is not to extract maximal information, but to construct a stable representational substrate on which later segmentation (S3), signature formation (S4/S4L) and decision logic (S5) can safely operate.
 
-A product leaves the S2 domain whenever it requires reasoning over spatial units rather than pixels or stations, or whenever it encodes semantic decisions rather than measurements.
+A useful mental model is:  
+S1 answers *“What did we measure?”*  
+S2 answers *“How do we represent this measurement as spatial structure?”*
 
-## Functional role of S2 in the decision stack
+---
 
-S2 fulfils three complementary functions.
+## 2. What “Representation” Means in This Context
 
-First, it produces physically interpretable predictor layers. Raw measurements are transformed into quantities that express terrain structure, hydrological context, vegetation structure, spectral behaviour or temporal dynamics. These layers form the quantitative basis for segmentation, signature construction and representation learning, but are not semantic objects themselves.
+The term **representation** is used here in a strict technical sense.
 
-Secondly, S2 supports pixel-level interpretation. Semantic information may appear at this stage, provided it is defined per pixel. Land-cover classifications, disturbance maps or probability surfaces are all legitimate S2 products. Pixel semantics do not imply object semantics; the unit of meaning remains the pixel.
+A representation is not a model prediction, not a classification and not a semantic label. It is a *mapping* from raw observation space into a structured feature space that:
 
-Thirdly, S2 includes descriptive observational summaries. Aggregated statistics, diagnostic figures or station climatologies remain part of S2 as long as they are purely descriptive and do not introduce decision-making logic or optimisation criteria.
+- preserves spatial alignment and traceability,
+- makes scale assumptions explicit,
+- constrains noise and artefacts,
+- and exposes interpretable dimensions.
 
-In the Burgwald implementation, this includes not only raster products but also explicitly registered tables and figures as artefacts, provided they remain descriptive (e.g. wind roses, frequency tables, buffer-mean summaries).
+Examples of representations in S2 are:
 
-## Design principles for S2 processing
+- a slope raster derived from a DEM,
+- a canopy height percentile derived from DOM–DEM differencing,
+- a breakpoint magnitude derived from a vegetation time series,
+- a segment purity value derived from land-cover overlap.
 
-All S2 products are subject to strict constraints regarding reproducibility and transparency.
+These representations are **constructed quantities**. They encode design decisions (resolution, aggregation rules, thresholds, filters) that must remain visible and auditable. This is why S2 is strongly contract-driven: every output is registered, versionable and reproducible.
 
-Inputs and outputs are centrally registered via the project registry and must not be hard-coded. Transformations must be explicit; implicit thresholds, undocumented resampling, silent smoothing or hidden aggregation must be avoided.
+Crucially, S2 representations are still *pre-semantic*. They describe structure, magnitude, variability or signal behaviour, but they do not yet say what something *is*. Semantics enter only later, either through explicit supervision (S2-5) or through learned representations (S4L).
 
-Spatial support is controlled deliberately. The canonical working grid is a 10 m raster. Higher-resolution sources may be used internally, but they must be aggregated deterministically. Sub-pixel modelling is intentionally excluded at this level to avoid scale ambiguity.
+---
 
-S2 scripts may depend operationally on artefacts from other levels, but they must not modify or overwrite artefacts outside of S2. Any operational exception (e.g. provider raw ZIP conventions not managed by the registry) must be stated explicitly as a design decision.
+## 3. Structural Overview of the Current S2 Pipeline
 
-## Product families in the Burgwald context
+The current implementation of S2 consists of five complementary pipelines that each generate a different type of representation:
 
-Terrain and hydrological derivatives transform a DEM into morphometric and flow-related predictors. These layers express physical structure and serve as quantitative inputs for later stages. In the current implementation, SAGA-based processing is run with explicit tool outputs and disk-backed intermediate grids to avoid implicit wrapper behaviour. Final products are exported as GeoTIFF stacks and single rasters on the canonical grid (e.g. relief stack, flow accumulation, stream distance, Strahler order, watershed IDs).
+| Pipeline | Dominant domain | Representation type | Spatial nature |
+|----------|-----------------|---------------------|----------------|
+| S2-1 | Geomorphology / Hydrology | Static structural fields | Raster |
+| S2-2 | Vegetation structure | Aggregated structural fields | Raster |
+| S2-3 | Atmospheric context | Statistical descriptors | Tables / figures |
+| S2-4 | Temporal dynamics | Signal-derived indicators | Raster |
+| S2-5 | Semantic anchoring | Supervised labels + features | Vector / table |
 
-Biostructural derivatives transform a DOM/DSM and DEM into canopy-structure predictors. The logic is strictly geometric: a canopy height model is formed by differencing (DOM − DEM), negative artefacts are clamped to zero, and blockwise statistics are aggregated deterministically from 1 m to 10 m. Canonical products include mean canopy height, p95 height, canopy height variability (sd), and canopy fraction above an explicit height threshold.
+This heterogeneity is intentional. Landscape modelling requires multiple representational modalities: geometry, structure, dynamics, context and semantics cannot be collapsed into a single homogeneous feature space without losing interpretability and control.
 
-Pixel-based classifications generate categorical maps from predictor stacks. The training infrastructure may use external geometries (e.g. polygon training areas), but the classification output is a per-pixel raster and remains an S2 artefact. In the current scripts, this includes unsupervised k-means exploration, Maximum Likelihood Classification, and Random Forest classification, with explicit persistence of the trained model and confusion matrix as registered artefacts.
+The unifying principle is not data type, but **epistemic function**: each pipeline produces a representation that captures a specific aspect of spatial reality under explicit assumptions.
 
-Time-series analyses operate on pixel stacks and produce per-pixel diagnostics of temporal behaviour. Change detection via BFAST on a kNDVI time series is a typical S2 product: each pixel yields a change date and change magnitude, without any object assumption.
+---
 
-Canonical predictor stacks can also be an S2 product, as long as they remain pixel-aligned measurement-derived layers. In the current implementation, an RF-ready predictor stack is created by appending registered S2 feature rasters and applying explicit reduction rules only to continuous predictors (zero-variance removal, exact linear combinations, and correlation pruning), while categorical layers are preserved unchanged. The baseline stack remains untouched; the reduced stack is written as a new registered product.
+## 4. S2-1 — Terrain and Hydrological Structure from DEM
 
-Observational climate summaries condense station measurements into descriptive statistics and visualisations, without applying decision logic. In the current wind climatology workflow, raw DWD ZIP inputs are intentionally treated as provider-managed (folder convention), while all resulting derived tables and figures are written exclusively to registry-defined output locations. Spatial filtering (e.g. AOI buffer selection) is a descriptive subset operation and remains within S2 as long as it does not become a selection criterion for downstream optimisation.
+### 4.1 From Elevation to Structural Geometry
 
-## Semantic versus organisational ordering
+A digital elevation model is a measurement of surface height. By itself, it contains no explicit information about slopes, curvature, connectivity or flow behaviour. All of these properties are *latent* and must be derived.
 
-The semantic level of a product is defined by its meaning rather than the execution order in the processing pipeline. Some S2 products may depend on non-registry raw inputs (provider conventions) or auxiliary geometries for practical reasons. This does not change their semantic classification as S2, provided the outputs remain pixel-based or purely descriptive at station level and do not introduce object semantics or decision logic.
+The S2-1 pipeline transforms the DEM into a set of geomorphological and hydrological representations using SAGA GIS. The central design decision is the introduction of a **canonical spatial grid**: the DEM is resampled to a uniform 10 m grid that becomes the spatial backbone for all subsequent raster-based representations.
 
-This distinction between the semantic level and the orchestration order is essential in order to maintain a flexible architecture without blurring conceptual responsibilities.
+This step is not merely technical. It establishes a fixed spatial scale at which structural reasoning takes place. Any later aggregation, segmentation or signature computation inherits this grid implicitly. The grid therefore defines the spatial resolution of structural knowledge in the system.
 
-## Contract statement
+### 4.2 Morphometric Representations
 
-S2 comprises all spatially explicit products that are derived directly from observations, prior to any segmentation, abstraction or decision logic. These products preserve physical or statistical interpretability and form the quantitative basis for all higher-level representations and decisions. In Burgwald, this includes both raster artefacts (indices, derivatives, classifications, change layers, canonical stacks) and descriptive station-based artefacts (tables and figures), provided they remain transformations and summaries rather than decisions.
+On the canonical grid, classical morphometric derivatives are computed: slope, aspect and multiple curvature measures. These fields encode local geometric properties of the terrain surface. Curvature measures, in particular, express second-order geometry and relate directly to flow divergence, convexity and accumulation tendencies.
+
+Additionally, the Topographic Position Index (TPI) is computed at multiple spatial radii. TPI expresses relative elevation with respect to a neighbourhood and thus encodes landform context (ridge, slope, valley) in a scale-dependent manner.
+
+These fields are not meant to simulate physical processes. They are **geometric descriptors that act as proxies for process-relevant structure**. Their epistemic role is explanatory rather than predictive.
+
+### 4.3 Hydrological Representations
+
+Hydrological derivatives are computed on a sink-filled DEM to enforce hydraulic connectivity. Flow accumulation, Strahler order, watershed identifiers and distance-to-channel fields are generated.
+
+Again, these are not hydrodynamic simulations. They represent topological structure and potential flow organization under simplified assumptions. Their purpose is to encode landscape connectivity and drainage structure in a form that can later be used as predictors or stratification variables.
+
+Taken together, S2-1 constructs a **structural geometry layer of the landscape**: static, deterministic, scale-defined and fully interpretable.¹
+
+---
+
+## 5. S2-2 — Vegetation Biostructure from Surface and Ground Models
+
+### 5.1 From Height Measurements to Structural Representation
+
+DOM and DEM provide absolute height measurements of surface and ground. Their difference yields a proxy for vegetation height, but only if both grids are geometrically aligned. The pipeline enforces strict grid harmonization before differencing.
+
+The differential canopy height model is defined as:
+
+\[
+\mathrm{dCHM}(x,y) = \max\bigl(0,\; \mathrm{DOM}(x,y) - \mathrm{DEM}(x,y)\bigr)
+\]
+
+Negative values are explicitly clipped to zero. This is a semantic decision: negative canopy height has no physical interpretation and represents artefacts rather than signal.
+
+### 5.2 Scale Stabilisation via Block Aggregation
+
+The raw dCHM exists at 1 m resolution. Using it directly would inject excessive spatial noise and violate scale consistency with the DEM-derived fields. Therefore, strict block aggregation to the canonical 10 m grid is applied.
+
+No smoothing kernels, no adaptive windows and no segmentation are used. The aggregation is purely geometric and preserves spatial alignment.
+
+For each 10 m cell, four descriptors are computed: mean height, 95th percentile height, within-cell height variability and canopy fraction above a fixed threshold.
+
+Formally, canopy fraction is defined as:
+
+\[
+f_{\mathrm{canopy}} = \frac{1}{N} \sum_{i=1}^{N} \mathbf{1}\bigl(\mathrm{dCHM}_i > h_{\mathrm{thr}}\bigr),
+\quad h_{\mathrm{thr}} = 2\,\mathrm{m}.
+\]
+
+### 5.3 Epistemic Role
+
+These fields do not represent species, biomass or ecological state. They represent **vertical structure and heterogeneity** in a deliberately coarse but robust way. They bridge the gap between raw geometric measurement and landscape-scale structural reasoning.
+
+In later stages, they act as explanatory variables for segmentation and signature formation rather than as direct ecological indicators.²
+
+---
+
+## 6. S2-3 — Atmospheric Context from DWD Wind Observations
+
+Unlike the raster-based pipelines, S2-3 operates on station time series and produces contextual descriptors rather than spatial fields.
+
+Hourly wind measurements from DWD are ingested directly from provider archives. Station metadata are harmonized and spatial filtering is applied using a 20 km buffer around the AOI.
+
+From these data, wind roses, directional distributions, seasonal summaries and aggregated statistics are generated. The outputs remain tables and figures; they are not rasterized or injected into the spatial predictor stack.
+
+The epistemic function of this pipeline is **contextualization**. It characterizes the atmospheric regime in which local spatial patterns are embedded. This information supports interpretation, hypothesis generation and later stratification, but it does not directly drive segmentation or classification.
+
+S2-3 therefore intentionally remains orthogonal to the spatial modelling chain.³
+
+---
+
+## 7. S2-4 — Temporal Disturbance Signals from Satellite Time Series
+
+S2-4 introduces temporal structure into S2.
+
+For each pixel of a Sentinel-2 data cube, a vegetation index time series is derived. NDVI is transformed into kNDVI to stabilize variance and reduce saturation effects:
+
+\[
+\mathrm{NDVI} = \frac{NIR - RED}{NIR + RED}, \qquad
+\mathrm{kNDVI} = \tanh(\mathrm{NDVI}^2).
+\]
+
+The kNDVI time series is analysed using `bfastmonitor` to detect structural breaks. Two quantities are retained:
+
+- the temporal location of a detected breakpoint,
+- the estimated magnitude of change.
+
+These are not labels of disturbance types. They are **signal descriptors** indicating the presence and strength of temporal discontinuities. Interpretation remains external and contextual.
+
+This pipeline introduces a dynamic dimension into S2 while preserving the principle of non-inference.⁴
+
+---
+
+## 8. S2-5 — Semantic Anchoring via Supervision Transfer
+
+S2-5 introduces the first explicit semantic linkage in the pipeline.
+
+A categorical land-cover raster is intersected with segmentation polygons. For each segment, area-weighted class shares are computed and mapped into project-specific semantic classes.
+
+The dominant class share defines the segment’s purity:
+
+\[
+\mathrm{purity} = \max_k(\mathrm{share}_k).
+\]
+
+Segments below minimum purity or minimum area thresholds are excluded from training data generation. For the remaining segments, predictor means are attached to form a training matrix.
+
+Two artefacts are produced: a fully annotated segment layer for diagnostics and a filtered training table for supervised learning.
+
+This step is epistemically sensitive. It embeds assumptions about class geometry, scale compatibility and label noise. It must therefore remain transparent and adjustable. S2-5 does not claim semantic truth; it provides **operationally usable supervision under explicit constraints**.⁵
+
+---
+
+## 9. Conceptual Synthesis
+
+S2 constructs five complementary representation layers:
+
+| Dimension | Representation |
+|-----------|----------------|
+| Geometry | Terrain and hydrology |
+| Vertical structure | Canopy biostructure |
+| Environmental context | Wind climatology |
+| Temporal dynamics | Disturbance signals |
+| Semantic anchoring | Supervised labels |
+
+The unifying principle is not algorithmic similarity, but epistemic clarity: each representation encodes a specific aspect of spatial reality under controlled assumptions, without collapsing into premature inference or optimisation.
+
+S2 therefore establishes the representational foundation upon which the higher abstraction levels of the Burgwald architecture operate.
+
+---
+
+## References
+
+[^1]: Wilson, J. P., & Gallant, J. C. (2000). *Terrain Analysis: Principles and Applications*. Wiley.  
+[^2]: Lefsky, M. A. et al. (2002). Lidar remote sensing for ecosystem studies. *BioScience*.  
+[^3]: WMO (2018). *Guide to Meteorological Instruments and Methods of Observation*.  
+[^4]: Verbesselt, J. et al. (2010). Detecting trend and seasonal changes in satellite image time series. *Remote Sensing of Environment*.  
+[^5]: Olofsson, P. et al. (2014). Good practices for estimating area and assessing accuracy of land change. *Remote Sensing of Environment*.

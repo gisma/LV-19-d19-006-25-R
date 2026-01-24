@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 # =============================================================================
-# Script:   03-1-RF-segs.R
+# Script:   02-5_seg_clc_trainDF.R
 # Project:  Burgwald Decision Stack
 #
 # GOAL
@@ -26,7 +26,7 @@
 suppressPackageStartupMessages({
   library(here)
   library(sf)
-  library(terra)
+  library(terra)"train_seg_rds"
   library(dplyr)
   library(tibble)
   library(readr)
@@ -299,6 +299,27 @@ if (is.finite(subsample_p) && subsample_p > 0 && subsample_p < 1) {
   seg_df_small <- seg_df
 }
 
+# stable class_id mapping (fine7) — required for probability indexing
+class_id_map <- tibble::tribble(
+  ~class,               ~class_id,
+  "water",                    1L,
+  "forest_broadleaf",         2L,
+  "forest_coniferous",        3L,
+  "forest_mixed",             4L,
+  "cropland",                 5L,
+  "grassland",                6L,
+  "mixed_green",              7L,
+  "urban_sealed",             8L
+)
+
+seg_df_small <- seg_df_small %>%
+  mutate(class = as.character(class)) %>%
+  left_join(class_id_map, by = "class")
+
+stopifnot(!any(is.na(seg_df_small$class_id)))
+
+
+
 seg_df_small$class <- droplevels(seg_df_small$class)
 
 # optional safety: gleiche Levels für class_id-map etc. später
@@ -492,7 +513,7 @@ pred_class_id <- class_map$class_id[match(pred_class, class_map$class)]
 pred_tab <- tibble(
   segment_id = seg_all_df$segment_id,
   pred_class = pred_class,
-  pred_class_id = pred_class_id,
+  pred_class_id = pred_class_id,                      
   pred_pmax = as.numeric(pred_pmax)
 )
 
