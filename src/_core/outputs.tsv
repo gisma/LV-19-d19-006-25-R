@@ -19,6 +19,7 @@ S1_observation	aoi_dgm	topography	tif	# S4_physio
 S1_observation	aoi_dom	topography	tif	# S4_physio
 # --- training ---
 S1_observation	training_polygons	training	gpkg
+S1_observation	gauges_hull	topography	GPKG
 
 # =========================================================
 # S2_features
@@ -109,3 +110,10 @@ S4_signatures	s4_lc_rf_2021	classification	tif
 S4_signatures	s4_lc_rf_cv_metrics_2021	classification	csv
 S4_signatures	s4_lc_rf_model_2021	classification	rds
 S4_signatures	s4_lc_rf_prob_2021	classification	tif
+
+
+S5-decision	layer0_it_strata_segments	singledomains	gpgk
+S5-decision	layer0_it_candidates_pts	singledomains	gpgk
+
+S5-decision	layer0_physio_strata_segments	singledomains	gpgk
+S5-decision	layer0_physio_candidates_pts	singledomains	gpgk
