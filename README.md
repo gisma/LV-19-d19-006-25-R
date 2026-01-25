@@ -31,12 +31,6 @@ The goal is *not* to offer a single pipeline, but a **collection of reproducible
 Different levels of abstraction are shown side-by-side so users can compare
 high-level convenience wrappers with low-level, fully transparent R workflows.
 
-## Structure
-
-```text
-renv/    # renv
-src/        # scripts &  functions and backend setup
-```
 
 ## Intended Use
 
@@ -44,16 +38,4 @@ The repository is designed as a **reference implementation** for students:
 clone it, inspect the scripts, and use it as a template for your own analyses.
 All content is educational; no single workflow is “the” workflow.
 
-## Usage of `renv`
-
-After cloning the repository:
-
-```R
-renv::restore()
-```
-
-This will automatically install all required R packages in the correct versions as defined in renv.lock.
-Your local system libraries do not matter — renv reconstructs the exact project environment for you.
-
-> Note: The first run of `renv::restore()` may take a while because all required packages are installed into an isolated project library.
 
