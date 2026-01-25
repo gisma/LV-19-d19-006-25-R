@@ -19,7 +19,7 @@ execute:
 Burgwald decision stack: meta-level description
 
 
-![](images/s4.drawio.svg){fig-align="center"}
+![](s4.drawio.svg){fig-align="center"}
 
 
 

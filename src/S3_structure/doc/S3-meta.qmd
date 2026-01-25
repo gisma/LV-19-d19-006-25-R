@@ -20,7 +20,7 @@ execute:
 # S3: Segmentation and structural spatial units  
 Burgwald decision stack — integrated conceptual and operational description
 
-![](images/s3.drawio.svg){fig-align="center"}
+![](s3.drawio.svg){fig-align="center"}
 
 
 

@@ -18,8 +18,9 @@ scripts <- list(
   it     = here::here("src", "04-1_signatures_landscape-metrics.R"),
   physio = here::here("src", "04-2_signatures_physiographic-metrics.R"),
   hydro  = here::here("src", "04-5_signatures_hydrology_metrics.R"),
-  cover  = here::here("src", "04-3_signatures_cover_metrics.R"),
+  cover  = here::here("src", "04-3_signatures_RF-points_classification.R"),
   bio    = here::here("src", "04-4_signatures_biostructure_metrics.R")
+  
 )
 
 run_one <- function(name, file) {

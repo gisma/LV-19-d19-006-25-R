@@ -21,8 +21,6 @@ execute:
 
 Burgwald decision stack: meta-level description
 
-
-
 ## 1. Why S2 Exists at All
 
 In the Burgwald architecture, S2 marks the first step where *data becomes representation*.

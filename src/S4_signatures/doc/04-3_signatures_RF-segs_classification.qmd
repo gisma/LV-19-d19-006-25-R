@@ -14,7 +14,7 @@ execute:
   echo: false
   warning: false
   message: false
-bibliography: images/ref.bib
+bibliography: ref.bib
 
 ---
 

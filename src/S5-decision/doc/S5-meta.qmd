@@ -12,7 +12,7 @@ execute:
 # S5: Decision and candidate selection space  
 Burgwald decision stack: meta-level description
 
-![](fig/s5.drawio.svg){fig-align="center"}
+![](s5.drawio.svg){fig-align="center"}
 
 ## Conceptual position of S5
 
