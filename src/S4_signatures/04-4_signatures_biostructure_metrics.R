@@ -110,7 +110,7 @@ bio_df <- tibble::tibble(
 )
 
 out_sf <- segments_sf %>%
-  dplyr::select(segment_id, geometry) %>%
+  dplyr::select(segment_id, geom) %>%
   dplyr::left_join(bio_df, by = "segment_id")
 
 ## -------------------------------------------------------------------

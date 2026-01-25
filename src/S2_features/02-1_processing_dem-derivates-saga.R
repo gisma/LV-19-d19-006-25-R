@@ -351,6 +351,8 @@ saga$io_gdal$export_raster(
   .verbose   = TRUE
 )
 
+
+
 r = rast(out_hydro_stack)
 names(r) = c("flowacc", "strahler", "watershed", "dist_to_water")
 tmp_file <- paste0(out_hydro_stack, ".tmp")
