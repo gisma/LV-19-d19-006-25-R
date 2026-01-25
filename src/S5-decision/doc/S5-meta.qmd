@@ -1,8 +1,11 @@
 ---
-title: "S5 meta — Decision and candidate selection space"
+title: "S5 — Validation and Selection Space"
 format:
   html:
     toc: true
+  pdf:
+    toc: false
+    number-sections: true 
 execute:
   echo: false
   warning: false
@@ -14,136 +17,68 @@ Burgwald decision stack: meta-level description
 
 ![](s5.drawio.svg){fig-align="center"}
 
-## Conceptual position of S5
+### Role of S5 in the Pipeline
 
-S5 denotes the layer in which descriptive segment representations are transformed
-into explicit decisions. Decisions include candidate selection, ranking,
-coverage control, and multi-criteria fusion under explicit constraints and
-parameters.
+S5 is the terminal decision space of the Burgwald pipeline. It does not generate spatial structure, nor does it reinterpret or refine it. All spatial meaning—segmentation, stratification, domain restriction, and candidate generation—is fixed before S5 is entered. By the time S5 operates, space is already discretised into segments, each segment is assigned to one or more strata, and each stratum provides an internally consistent distance metric.
 
-The unit of operation remains the segment, but the semantics change: S5
-introduces normative logic. Quantities are no longer interpreted as neutral
-descriptors but are used to express preferences, representativeness, coverage,
-and admissibility.
+This strict separation is intentional. S5 is not a modelling layer and not a discovery layer. Its sole function is to **transform a set of already valid alternatives into a defensible choice**. Any operation that would alter the spatial hypothesis space—re-clustering, redefining domains, or reweighting geometry—would violate the contract of S5 and must occur upstream.
 
-S5 addresses the following question:
+S5 therefore answers a narrowly defined question:
+*Given this set of candidates and these explicit decision rules, which candidates are selected, and why?*
 
-> Given a fixed attribute space on stable segments, which concrete spatial
-> candidates should be selected under explicit constraints, objectives, and
-> trade-offs?
 
-S5 therefore converts representations into actionable subsets.
 
----
+### Preconditions Entering S5
 
-## Boundary conditions: what S5 explicitly excludes
+S5 presupposes that all candidate-generating logic has been completed in S4. This includes IT-, physio-, hydro-, biostructure-, and coverage-based stratifications. Each of these produces two artefacts: a **complete segment layer** annotated with stratum membership and distance-to-centre measures, and a **candidate subset** derived from those strata according to S4-specific rules.
 
-S5 does not generate raster predictors or measurement products (S2).  
-It does not generate or modify spatial partitions (S3).  
-It does not generate new descriptive signatures (S4).  
-It does not perform representation learning or embedding (S4L).  
-It does not perform validation, benchmarking, or uncertainty analysis (S6).
+All spatial constraints—AOI restriction, watershed hulls, station-based envelopes—must already be applied at this stage. S5 does not test spatial validity. It assumes it. Any candidate passed to S5 is treated as spatially admissible by construction.
 
-Any operation that merely computes descriptors without selection semantics
-remains outside S5.
+As a consequence, S5 treats all incoming decision spaces symmetrically. IT strata are not privileged over physio strata, nor are hydro distances inherently more informative than biostructure distances. Differences in importance are not implicit; they are introduced only through explicit decision logic.
 
----
 
-## Functional role of S5 in the decision stack
 
-S5 fulfils three coupled roles.
+### Decision Architecture Inside S5
 
-First, it defines admissible design space. Hard filters restrict which segments
-are allowed to participate in a decision (e.g. forest-only constraints or domain
-subsets).
+The internal logic of S5 is intentionally layered. Each layer has a distinct responsibility, and none of them are interchangeable.
 
-Second, it structures candidate spaces. Segments are clustered into strata in
-multiple domain-specific spaces (information-theoretic, physiographic,
-hydrological, biostructural, coverage). Distance to cluster center serves as a
-formalised representativeness criterion.
+The first layer is **metric harmonisation**. Distances originating from different S4 spaces are not comparable by default. Harmonisation transforms these distances into a common numerical frame—typically through normalisation—so that they can be evaluated jointly. This step is purely technical. It does not assert that the underlying processes are comparable; it merely ensures that the decision problem is mathematically well-posed.
 
-Third, it resolves selection and trade-offs. Candidates are selected per stratum
-using lexicographic ranking or weighted multi-criteria decision analysis (MCDA).
-Optional spatial spacing enforces geometric independence between selected
-candidates.
+The second layer is **evaluation**, which may be implemented either as a formal multi-criteria decision analysis (MCDA) or as a reduced rule-based scoring scheme. MCDA is used when trade-offs between competing criteria are intentional and must be made explicit. Weights in MCDA are not optimisation parameters; they are **statements of preference**. Changing them must change the outcome. If it does not, the decision logic is ill-defined.
 
-The outputs are explicit candidate sets (segments and representative points)
-rather than continuous fields.
+The third layer is **selection**, implemented through selector rules. Selectors do not evaluate candidates in an abstract sense; they **enforce constraints on the evaluated set**. Typical selector logic includes per-stratum quotas, minimal spatial separation, or limits on redundancy. Selectors are not softer versions of MCDA. They operate at a different epistemic level: MCDA orders candidates, selectors restrict admissible solutions.
 
----
+Crucially, S5 does not collapse these layers. Evaluation without selection produces rankings but no decisions. Selection without evaluation produces arbitrary filtering. Only their explicit combination produces a controlled and interpretable outcome.
 
-## Design principles for S5 processing
 
-All S5 workflows obey the following constraints.
 
-Decision logic is explicit and parameterised. Filters, quotas, ranking modes,
-weights, and spacing rules are declared in code and versionable.
+### Interpretation of Strata in S5
 
-Geometry remains immutable. Segment geometry is inherited from upstream layers
-and never modified.
+In S5, strata are treated strictly as **operational typifications**. A stratum is a label indicating membership in a cluster defined in a specific representation space. It is not an ecological class, not a hydrological unit, and not a process regime.
 
-Selection semantics are transparent. Distances, scores, and ranking criteria are
-materialised as attributes in the output layers.
+S5 does not interpret strata. It respects them. This means that selection logic may enforce representation across strata, but it never assigns meaning to what a stratum “is”. Any semantic interpretation belongs upstream or outside the pipeline altogether.
 
-Productive and exploratory outputs are separated. Scenario exploration may
-write temporary artefacts, while promoted products are registered explicitly.
 
----
 
-## Product families in the Burgwald context
+### Normativity and Responsibility
 
-S5 is implemented as several parallel decision spaces, each producing strata and
-candidate outputs.
+S5 is the point in the pipeline where normativity becomes unavoidable. Every weight, every threshold, and every selector rule encodes a value judgement: centrality versus diversity, redundancy versus coverage, representativeness versus extremity. The pipeline does not attempt to hide these judgements behind optimisation rhetoric.
 
-**Information-theoretic decision space**  
-Clusters segments in IT metric space and selects representative segments and
-points.
+Responsibility in S5 therefore lies not in the correctness of the code alone, but in the justifiability of the decision logic with respect to the problem definition in S0. S5 makes these choices explicit, inspectable, and reversible. This is a design goal, not a limitation.
 
-**Physiographic decision space**  
-Clusters segments in terrain-derived attribute space and selects representative
-candidates.
 
-**Hydrological decision space**  
-Clusters segments in flow- and network-related attribute space and selects
-representative candidates.
 
-**Biostructural decision space**  
-Clusters segments in canopy and structure attribute space and selects
-representative candidates.
+### What S5 Explicitly Does Not Do
 
-**Coverage decision space**  
-Clusters segments in land-cover fraction space and selects representative
-candidates.
+S5 does not optimise networks in a formal sense. It does not guarantee maximal information gain, hydrological closure, or spatial representativeness. If such properties emerge, they do so as consequences of explicit rules, not as automatic outcomes.
 
-**MCDA fusion space**  
-Fuses per-domain representativeness distances into a weighted composite score
-and selects globally ranked candidates.
+S5 also does not resolve uncertainty. It exposes it. By making evaluation and selection logic explicit, S5 allows alternative assumptions to be tested and compared without changing the upstream spatial model.
 
-**Constraint-based selector**  
-Executes declarative scenario settings combining hard filters, coverage targets,
-ranking strategy (lexicographic or MCDA), and spatial spacing constraints.
 
-All outputs consist of selected segments and derived representative points.
 
----
+### Outcome
 
-## Semantic versus organisational ordering
+A successful S5 implementation does not yield a single authoritative solution. It yields a **traceable decision path** from spatial abstractions to concrete selections. Its value lies in making disagreement, sensitivity, and alternative choices structurally visible rather than implicit.
 
-S5 is defined by the presence of explicit selection semantics, not by script
-location or execution order. Any workflow that introduces filtering, ranking,
-quota enforcement, weighting, or optimisation enters S5 by definition.
+S5 closes the pipeline not by producing certainty, but by making the limits and consequences of decision-making explicit.
 
-Conversely, workflows that only compute descriptive attributes remain in S4,
-even if they are executed close to decision scripts.
-
-This separation preserves interpretability and prevents entanglement of
-representation and decision logic.
-
----
-
-## Contract statement
-
-S5 comprises all operations that transform descriptive segment representations
-into explicit candidate selections under declared constraints and objectives. It
-produces reproducible, parameterised decision artefacts while preserving full
-traceability to upstream representations.
