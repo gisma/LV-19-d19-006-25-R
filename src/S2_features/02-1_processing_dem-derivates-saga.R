@@ -114,11 +114,11 @@ out_hydro_stack  <- paths[["hydro_stack_10m"]]
 # NOTE: All intermediate .sgrd/.sdat products are written here.
 # They are removed at the end of the script (cleanup block).
 #
-# IMPORTANT: This line references `out_flowacc`, which must exist in the
+# IMPORTANT: This line references `out_hydro_stack`, which must exist in the
 # environment/registry in your project context. In your earlier working
-# version, `work_dir` was defined as `dirname(out_flowacc)` to place the
+# version, `work_dir` was defined as `dirname(out_hydro_stack)` to place the
 # intermediate grids next to the canonical hydrology outputs.
-work_dir <- file.path(dirname(out_flowacc))
+work_dir <- file.path(dirname(out_hydro_stack))
 dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
 
 # -------------------------------------------------------------------
@@ -339,7 +339,7 @@ saga$ta_channels$overland_flow_distance_to_channel_network(
 # - `multiple = 1` writes a multiband raster to `file`.
 # - `format = 1` selects GeoTIFF in this binding.
 # - nodata handling is forced to -99999 to keep missing values explicit.
-msg("Export Hydro Stack to: ", dirname(out_flowacc))
+msg("Export Hydro Stack to: ", dirname(out_hydro_stack))
 saga$io_gdal$export_raster(
   grids = list(flowacc_sgrd, order_sgrd, basin_sgrd, dist_sgrd),
   multiple   = 1,
@@ -350,6 +350,13 @@ saga$io_gdal$export_raster(
   nodata     = -99999,
   .verbose   = TRUE
 )
+
+r = rast(out_hydro_stack)
+names(r) = c("flowacc", "strahler", "watershed", "dist_to_water")
+tmp_file <- paste0(out_hydro_stack, ".tmp")
+terra::writeRaster(r, tmp_file, filetype= "GTiff",overwrite = TRUE)
+file.rename(tmp_file, out_hydro_stack)
+
 
 msg("Export Topo Stack to: ", dirname(out_relief_stack))
 saga$io_gdal$export_raster(
@@ -387,22 +394,30 @@ saga$io_gdal$export_raster(
 # GeoTIFF written by SAGA gets band names set via terra to provide
 # stable semantic layer naming downstream (signatures, modeling, plots).
 r <- terra::rast(out_relief_stack)
-names(r) <- c(
+
+# existing canonical names
+nm <- c(
   "dem10m", "dem10m_filled", "slope", "aspect",
   "c_gene", "c_prof", "c_plan", "c_tang",
   "c_long", "c_cros", "c_mini", "c_maxi",
   "c_tota", "c_roto",
   "tpi_r30", "tpi_r50", "tpi_r100"
 )
-tmp_file <- paste0(out_relief_stack, ".tmp")
-terra::writeRaster(r, tmp_file, overwrite = TRUE)
-file.rename(tmp_file, out_relief_stack)
+names(r) <- nm
 
-r <- terra::rast(out_hydro_stack)
-names(r) <- c("flowacc", "strahler", "watershed", "dist_to_water")
-tmp_file <- paste0(out_hydro_stack, ".tmp")
-terra::writeRaster(r, tmp_file, overwrite = TRUE)
-file.rename(tmp_file, out_hydro_stack)
+# Southness (0..1): cos(aspect - 180°) scaled to [0,1]
+# aspect is degrees
+aspect_rad <- r[["aspect"]] * pi / 180
+southness  <- cos(aspect_rad - pi)        # [-1..1]
+southness01 <- (southness + 1) / 2        # [0..1]
+names(southness01) <- "southness"
+
+# append derived band
+r2 <- c(r, southness01)
+
+tmp_file <- paste0(out_relief_stack, ".tmp")
+terra::writeRaster(r2, tmp_file, filetype= "GTiff",overwrite = TRUE)
+file.rename(tmp_file, out_relief_stack)
 
 # -------------------------------------------------------------------
 # 9) Cleanup: remove intermediate SAGA artifacts

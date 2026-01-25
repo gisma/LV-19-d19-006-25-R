@@ -4,31 +4,30 @@
 # Project: Burgwald
 #
 # Purpose:
-#   Build S4_signatures physiographic metrics per *stable* segment.
-#   - NO clustering
-#   - NO candidates
-#   - NO decision logic
+#   Build S4_signatures per segment by extracting a COMPLETE signature
+#   from canonical S2 stacks (no re-derivation):
+#     - relief_stack_10m
+#     - hydro_stack_10m
 #
-# Inputs (via paths[...] registry):
-#   - layer0_segments            (S3_structure, gpkg)
-#   - aoi_dgm                    (S1_observation, tif)  OR
-#     optionally relief_stack_10m (S2_features, tif) if you want to use it later
-#   - wind_means_summary         (S2_features, rds) OPTIONAL (for windwardness)
+# Stats per continuous band:
+#   mean, stdev, min, max, coefficient_of_variation, q25, q50, q75
 #
-# Output (via paths[...] registry):
-#   - layer0_attr_physio_metrics (S4_signatures, gpkg)
+# Categorical / ordinal hydro bands:
+#   - watershed: mode + mode_share (area-weighted)
+#   - strahler:  mode + mode_share (area-weighted) + max
 #
-# Output columns (segment-level):
-#   segment_id
-#   elev_mean
-#   slope_mean_deg
-#   aspect_mean_deg
-#   southness_mean   (scaled to [0,1], 0=north, 1=south)
-#   windward_summer  (optional; mean cos(aspect - mean_wd_summer), [-1..1])
-#   windward_winter  (optional; mean cos(aspect - mean_wd_winter), [-1..1])
+# Inputs (paths registry):
+#   - layer0_segments
+#   - relief_stack_10m
+#   - hydro_stack_10m
+#   - wind_means_summary (optional)
+#
+# Output:
+#   - layer0_attr_physio_metrics
 ############################################################
 
 suppressPackageStartupMessages({
+  library(here)
   library(sf)
   library(terra)
   library(dplyr)
@@ -36,151 +35,255 @@ suppressPackageStartupMessages({
   library(exactextractr)
 })
 
-## ---------------------------------------------------------
-## 0) Setup / Registry
-## ---------------------------------------------------------
-
 source(here::here("src","_core","01-setup-burgwald.R"))
 
-seg_file <- paths[["layer0_segments"]]
-dem_file <- paths[["aoi_dgm"]]
-out_file <- paths[["layer0_attr_physio_metrics"]]
+seg_file    <- paths[["layer0_segments"]]
+relief_file <- paths[["relief_stack_10m"]]
+hydro_file  <- paths[["hydro_stack_10m"]]
+out_file    <- paths[["layer0_attr_physio_metrics"]]
 
-message("Input segments: ", seg_file)
-message("Input DEM:      ", dem_file)
-message("Output:         ", out_file)
+message("Input segments:     ", seg_file)
+message("Input relief stack: ", relief_file)
+message("Input hydro stack:  ", hydro_file)
+message("Output:             ", out_file)
 
-## ---------------------------------------------------------
-## 1) Read inputs
-## ---------------------------------------------------------
+stopifnot(file.exists(seg_file), file.exists(relief_file), file.exists(hydro_file))
+
 segments_sf <- sf::read_sf(seg_file)
-if (!"segment_id" %in% names(segments_sf)) {
-  stop("Segments file does not contain 'segment_id': ", seg_file)
+if (!"segment_id" %in% names(segments_sf)) stop("Missing segment_id in: ", seg_file)
+
+relief <- terra::rast(relief_file)
+hydro  <- terra::rast(hydro_file)
+
+# CRS: segments -> raster CRS (relief anchors)
+crs_relief <- terra::crs(relief, proj = TRUE)
+if (is.na(crs_relief) || crs_relief == "") stop("relief_stack_10m has no CRS: ", relief_file)
+if (is.na(sf::st_crs(segments_sf))) stop("Segments have no CRS: ", seg_file)
+
+if (!identical(sf::st_crs(segments_sf)$wkt, crs_relief)) {
+  segments_sf <- sf::st_transform(segments_sf, crs_relief)
 }
-
-dem <- terra::rast(dem_file)
-
-## ---------------------------------------------------------
-## 2) CRS harmonisation
-## ---------------------------------------------------------
-crs_dem <- terra::crs(dem, proj = TRUE)
-if (is.na(crs_dem) || crs_dem == "") stop("DEM has no CRS: ", dem_file)
-
-if (is.na(sf::st_crs(segments_sf))) {
-  stop("Segments have no CRS: ", seg_file)
-}
-
-if (!identical(sf::st_crs(segments_sf)$wkt, crs_dem)) {
-  segments_sf <- sf::st_transform(segments_sf, crs_dem)
-}
-
-# Optional: fix invalid geometries if present (keep minimal)
-# (Only touch if needed)
 if (any(!sf::st_is_valid(segments_sf))) {
   message("Fixing invalid segment geometries with st_make_valid() ...")
   segments_sf <- sf::st_make_valid(segments_sf)
 }
 
-## ---------------------------------------------------------
-## 3) Terrain derivatives
-## ---------------------------------------------------------
-# Slope / aspect from DEM
-slope_deg  <- terra::terrain(dem, v = "slope",  unit = "degrees")
-aspect_deg <- terra::terrain(dem, v = "aspect", unit = "degrees")
+# Hydro CRS must match (pipeline invariant)
+crs_hydro <- terra::crs(hydro, proj = TRUE)
+if (!identical(crs_hydro, crs_relief)) {
+  stop("CRS mismatch: relief_stack_10m vs hydro_stack_10m. Fix in S2 export.")
+}
 
-# Southness: cos(aspect - 180°) scaled to [0,1]
-aspect_rad  <- aspect_deg * pi / 180
-southness   <- cos(aspect_rad - pi)     # [-1..1]
-southness01 <- (southness + 1) / 2      # [0..1]
-names(southness01) <- "southness"
+# Relief must contain at least these (for windwardness + sanity); southness is expected from S2
+req_relief <- c("dem10m", "slope", "aspect", "southness")
+missing_req <- setdiff(req_relief, names(relief))
+if (length(missing_req) > 0) {
+  stop(
+    "relief_stack_10m missing required bands: ",
+    paste(missing_req, collapse = ", "),
+    "\nCurrent bands: ", paste(names(relief), collapse = ", ")
+  )
+}
 
-## ---------------------------------------------------------
-## 4) Optional: windwardness using wind_means_summary
-## ---------------------------------------------------------
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+# Robust quantile column finder across exactextractr versions
+find_quantile_col <- function(colnames_vec, q) {
+  # accept: quantile_25, quantile_0.25, quantile.25, quantile0.25, etc.
+  pct <- as.integer(round(q * 100))
+  # candidates containing 0.25 or 25
+  cand <- grep(paste0("^quantile.*(", q, "|", pct, ")$"), colnames_vec, value = TRUE)
+  if (length(cand) == 1) return(cand[[1]])
+  # fallback: anything starting with quantile that ends with pct
+  cand <- grep(paste0("^quantile.*", pct, "$"), colnames_vec, value = TRUE)
+  if (length(cand) == 1) return(cand[[1]])
+  NA_character_
+}
+
+extract_signature_continuous_allbands <- function(r, polys_sf, prefix) {
+  bn <- names(r)
+  if (length(bn) == 0) stop("Raster has no band names for prefix: ", prefix)
+  
+  stats_fun <- c("mean", "stdev", "min", "max", "coefficient_of_variation", "quantile")
+  qs <- c(0.25, 0.50, 0.75)
+  
+  out <- tibble::tibble(segment_id = polys_sf$segment_id)
+  
+  for (b in bn) {
+    x <- exactextractr::exact_extract(
+      r[[b]],
+      polys_sf,
+      fun = stats_fun,
+      quantiles = qs
+    )
+    
+    nms <- names(x)
+    need <- c("mean", "stdev", "min", "max", "coefficient_of_variation")
+    if (!all(need %in% nms)) {
+      stop("Missing expected stats from exact_extract for band '", b, "': ",
+           paste(setdiff(need, nms), collapse = ", "))
+    }
+    
+    q25 <- find_quantile_col(nms, 0.25)
+    q50 <- find_quantile_col(nms, 0.50)
+    q75 <- find_quantile_col(nms, 0.75)
+    
+    out[[paste0(prefix, "__", b, "__mean")]] <- as.numeric(x[["mean"]])
+    out[[paste0(prefix, "__", b, "__sd")]]   <- as.numeric(x[["stdev"]])
+    out[[paste0(prefix, "__", b, "__min")]]  <- as.numeric(x[["min"]])
+    out[[paste0(prefix, "__", b, "__max")]]  <- as.numeric(x[["max"]])
+    out[[paste0(prefix, "__", b, "__cv")]]   <- as.numeric(x[["coefficient_of_variation"]])
+    
+    if (!is.na(q25)) out[[paste0(prefix, "__", b, "__q25")]] <- as.numeric(x[[q25]])
+    if (!is.na(q50)) out[[paste0(prefix, "__", b, "__q50")]] <- as.numeric(x[[q50]])
+    if (!is.na(q75)) out[[paste0(prefix, "__", b, "__q75")]] <- as.numeric(x[[q75]])
+  }
+  
+  out
+}
+
+extract_mode_share <- function(values, coverage_fraction) {
+  ok <- is.finite(values) & is.finite(coverage_fraction)
+  v <- values[ok]
+  w <- coverage_fraction[ok]
+  
+  v <- v[!is.na(v)]
+  w <- w[!is.na(w)]
+  
+  if (length(v) == 0) return(c(mode = NA_real_, mode_share = NA_real_))
+  
+  tab <- tapply(w, v, sum)  # area-weighted vote
+  mode_val <- as.numeric(names(tab)[which.max(tab)])
+  mode_w   <- as.numeric(max(tab))
+  total_w  <- as.numeric(sum(tab))
+  
+  c(mode = mode_val, mode_share = if (total_w > 0) mode_w / total_w else NA_real_)
+}
+
+# ------------------------------------------------------------------
+# 1) Relief: treat as continuous stack (full signature for all bands)
+# ------------------------------------------------------------------
+relief_sig <- extract_signature_continuous_allbands(relief, segments_sf, prefix = "relief")
+
+# ------------------------------------------------------------------
+# 2) Hydro: mixed handling
+#    - watershed: mode + mode_share
+#    - strahler:  mode + mode_share + max
+#    - everything else: continuous signature
+# ------------------------------------------------------------------
+bn_h <- names(hydro)
+if (length(bn_h) == 0) stop("hydro_stack_10m has no band names")
+
+# build out with segment_id
+hydro_sig <- tibble::tibble(segment_id = segments_sf$segment_id)
+
+for (b in bn_h) {
+  
+  if (b %in% c("watershed", "watershed_id", "basin", "basin_id")) {
+    
+    mode_df <- exactextractr::exact_extract(
+      hydro[[b]],
+      segments_sf,
+      fun = function(values, coverage_fraction) {
+        extract_mode_share(values, coverage_fraction)
+      }
+    )
+    
+    hydro_sig[[paste0("hydro__", b, "__mode")]]       <- as.numeric(mode_df[["mode"]])
+    hydro_sig[[paste0("hydro__", b, "__mode_share")]] <- as.numeric(mode_df[["mode_share"]])
+    
+    next
+  }
+  
+  if (b %in% c("strahler", "order", "strahler_order")) {
+    
+    mode_df <- exactextractr::exact_extract(
+      hydro[[b]],
+      segments_sf,
+      fun = function(values, coverage_fraction) {
+        ms <- extract_mode_share(values, coverage_fraction)
+        ok <- is.finite(values)
+        vmax <- if (any(ok)) suppressWarnings(max(values[ok], na.rm = TRUE)) else NA_real_
+        c(mode = ms[["mode"]], mode_share = ms[["mode_share"]], max = vmax)
+      }
+    )
+    
+    hydro_sig[[paste0("hydro__", b, "__mode")]]       <- as.numeric(mode_df[["mode"]])
+    hydro_sig[[paste0("hydro__", b, "__mode_share")]] <- as.numeric(mode_df[["mode_share"]])
+    hydro_sig[[paste0("hydro__", b, "__max")]]        <- as.numeric(mode_df[["max"]])
+    
+    next
+  }
+  
+  # default: treat as continuous
+  tmp <- extract_signature_continuous_allbands(hydro[[b]], segments_sf, prefix = "hydro")
+  # tmp has: segment_id + hydro__<b>__* columns (because names(hydro[[b]]) == b)
+  # merge into hydro_sig
+  keep_cols <- setdiff(names(tmp), "segment_id")
+  for (cc in keep_cols) hydro_sig[[cc]] <- tmp[[cc]]
+}
+
+# ------------------------------------------------------------------
+# 3) Optional: windwardness (uses relief band 'aspect' only)
+# ------------------------------------------------------------------
 has_wind <- ("wind_means_summary" %in% names(paths)) && file.exists(paths[["wind_means_summary"]])
-
-windward_summer_r <- NULL
-windward_winter_r <- NULL
+wind_df <- NULL
 
 if (has_wind) {
   wind_means_summary <- readRDS(paths[["wind_means_summary"]])
   
-  if (!all(c("period", "mean_wd") %in% names(wind_means_summary))) {
-    message("wind_means_summary exists but lacks columns {period, mean_wd}. Skipping windwardness.")
-    has_wind <- FALSE
-  } else {
+  if (all(c("period","mean_wd") %in% names(wind_means_summary)) && "aspect" %in% names(relief)) {
+    
     wd_summer <- wind_means_summary$mean_wd[wind_means_summary$period == "Summer"]
     wd_winter <- wind_means_summary$mean_wd[wind_means_summary$period == "Winter"]
     
-    if (length(wd_summer) != 1L || length(wd_winter) != 1L) {
-      message("wind_means_summary does not have exactly one Summer and one Winter mean_wd. Skipping windwardness.")
-      has_wind <- FALSE
+    if (length(wd_summer) == 1L && length(wd_winter) == 1L) {
+      
+      aspect_deg <- relief[["aspect"]]
+      windward_summer_r <- cos((aspect_deg - wd_summer) * pi / 180)  # [-1..1]
+      windward_winter_r <- cos((aspect_deg - wd_winter) * pi / 180)  # [-1..1]
+      
+      w_s <- exactextractr::exact_extract(windward_summer_r, segments_sf, "mean")
+      w_w <- exactextractr::exact_extract(windward_winter_r, segments_sf, "mean")
+      
+      wind_df <- tibble::tibble(
+        segment_id = segments_sf$segment_id,
+        windward__summer__mean = as.numeric(w_s),
+        windward__winter__mean = as.numeric(w_w)
+      )
+      
+      message("Windwardness enabled (uses relief band 'aspect').")
     } else {
-      # windwardness: cos((aspect - mean_wd) * pi/180) in [-1..1]
-      windward_summer_r <- cos((aspect_deg - wd_summer) * pi / 180)
-      windward_winter_r <- cos((aspect_deg - wd_winter) * pi / 180)
-      names(windward_summer_r) <- "windward_summer"
-      names(windward_winter_r) <- "windward_winter"
-      message("Windwardness enabled (Summer/Winter).")
+      message("wind_means_summary missing exactly one Summer and one Winter mean_wd. Skipping windwardness.")
     }
+  } else {
+    message("wind_means_summary present but missing required columns or relief lacks 'aspect'. Skipping windwardness.")
   }
 } else {
-  message("wind_means_summary not available. Windwardness will be NA.")
+  message("wind_means_summary not available. Windwardness omitted.")
 }
 
-## ---------------------------------------------------------
-## 5) Zonal extraction per segment
-## ---------------------------------------------------------
-# exact_extract returns numeric vectors aligned with polygon order
-elev_mean         <- exactextractr::exact_extract(dem,        segments_sf, "mean")
-slope_mean_deg    <- exactextractr::exact_extract(slope_deg,  segments_sf, "mean")
-aspect_mean_deg   <- exactextractr::exact_extract(aspect_deg, segments_sf, "mean")
-southness_mean    <- exactextractr::exact_extract(southness01,segments_sf, "mean")
-
-windward_summer <- rep(NA_real_, length(elev_mean))
-windward_winter <- rep(NA_real_, length(elev_mean))
-
-if (has_wind) {
-  windward_summer <- exactextractr::exact_extract(windward_summer_r, segments_sf, "mean")
-  windward_winter <- exactextractr::exact_extract(windward_winter_r, segments_sf, "mean")
-}
-
-physio_df <- tibble(
-  segment_id       = segments_sf$segment_id,
-  elev_mean        = as.numeric(elev_mean),
-  slope_mean_deg   = as.numeric(slope_mean_deg),
-  aspect_mean_deg  = as.numeric(aspect_mean_deg),
-  southness_mean   = as.numeric(southness_mean),
-  windward_summer  = as.numeric(windward_summer),
-  windward_winter  = as.numeric(windward_winter)
-)
-
-## ---------------------------------------------------------
-## 6) Attach to geometry + write product
-## ---------------------------------------------------------
-segments_sf <- sf::read_sf(seg_file)
-
-if (!identical(sf::st_crs(segments_sf)$wkt, crs_dem)) {
-  segments_sf <- sf::st_transform(segments_sf, crs_dem)
-}
-# sicherstellen, dass es sf ist
-stopifnot(inherits(segments_sf, "sf"))
-
-# Geometriename robust holen
+# ------------------------------------------------------------------
+# 4) Join + write
+# ------------------------------------------------------------------
 geom_col <- attr(segments_sf, "sf_column")
 stopifnot(is.character(geom_col), geom_col %in% names(segments_sf))
 
 out_sf <- segments_sf %>%
   dplyr::select(segment_id, dplyr::all_of(geom_col)) %>%
-  dplyr::left_join(physio_df, by = "segment_id") %>%
-  sf::st_as_sf()
+  dplyr::left_join(relief_sig, by = "segment_id") %>%
+  dplyr::left_join(hydro_sig,  by = "segment_id")
 
-# Ensure output directory exists
+if (!is.null(wind_df)) out_sf <- out_sf %>% dplyr::left_join(wind_df, by = "segment_id")
+
 out_dir <- dirname(out_file)
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Overwrite existing layer/file
 sf::st_write(out_sf, out_file, delete_dsn = TRUE, quiet = TRUE)
 
 message("Wrote: ", out_file)
-message("Columns: ", paste(names(out_sf), collapse = ", "))
+message("n_segments: ", nrow(out_sf))
+message("n_cols: ", ncol(out_sf))
+message("Example cols: ", paste(head(names(out_sf), 30), collapse = ", "))
