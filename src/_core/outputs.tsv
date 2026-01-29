@@ -114,6 +114,11 @@ S4_signatures	s4_lc_rf_prob_2021	classification	tif
 
 S5-decision	layer0_it_strata_segments	singledomains	gpgk
 S5-decision	layer0_it_candidates_pts	singledomains	gpgk
+S5-decision	layer0_hydro_strata_segments	singledomains	gpgk
+S5-decision	layer0_biostructure_strata_segments	singledomains	gpgk
 
 S5-decision	layer0_physio_strata_segments	singledomains	gpgk
 S5-decision	layer0_physio_candidates_pts	singledomains	gpgk
+S5-decision	layer0_hydro_candidates_pts	singledomains	gpgk
+S5-decision	layer0_biostructure_candidates_pts	singledomains	gpgk
+
