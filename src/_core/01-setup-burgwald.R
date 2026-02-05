@@ -11,23 +11,68 @@
 if (!requireNamespace("pacman", quietly = TRUE)) {
   install.packages("pacman")
 }
+# --- packages (Windows + Linux, fehlertolerant) ----------------------------
+
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
 library(pacman)
 
-pacman::p_load(
-  here, fs, lubridate,
-  sf, terra,
-  gdalcubes, stars, tidyterra, rstac, CDSE,
-  exactextractr, RStoolbox,
-  dplyr, tidyr, ggplot2, curl,
-  mapview, mapedit, tmap, tmaptools, colorspace,
-  httr, ows4R, jsonlite, osmdata, rvest, data.table,
-  randomForest, ranger, e1071, caret, Rsagacmd, bfast, sp,link2GI
+p_load_tolerant <- function(pkgs, install = TRUE, repos = getOption("repos")) {
+  ok <- character(0)
+  fail <- list()
+  
+  for (p in pkgs) {
+    res <- try({
+      if (!requireNamespace(p, quietly = TRUE)) {
+        if (!install) stop("not installed")
+        install.packages(p, repos = repos, dependencies = TRUE)
+      }
+      suppressPackageStartupMessages(library(p, character.only = TRUE))
+      TRUE
+    }, silent = TRUE)
+    
+    if (isTRUE(res)) {
+      ok <- c(ok, p)
+    } else {
+      fail[[p]] <- as.character(res)
+      message("Package FAILED: ", p)
+    }
+  }
+  
+  message("\n--- Package load summary ---")
+  message("OK:   ", paste(ok, collapse = ", "))
+  message("FAIL: ", if (length(fail)) paste(names(fail), collapse = ", ") else "<none>")
+  
+  invisible(list(ok = ok, fail = fail))
+}
+
+pkgs <- c(
+  "here","fs","lubridate",
+  "sf","terra",
+  "gdalcubes","stars","tidyterra","rstac","CDSE",
+  "exactextractr","RStoolbox",
+  "dplyr","tidyr","ggplot2","curl",
+  "mapview","mapedit","tmap","tmaptools","colorspace",
+  "httr","ows4R","jsonlite","osmdata","rvest","data.table",
+  "randomForest","ranger","e1071","caret","Rsagacmd","bfast","sp","link2GI"
 )
 
-# remotes::install_github("r-spatial/link2GI", ref = "master")
-# library(link2GI)
-install.packages("OpenStreetMap")
-library(OpenStreetMap)
+pkg_status <- p_load_tolerant(pkgs, install = TRUE)
+
+# --- optional: OpenStreetMap (nicht kritisch) ------------------------------
+# Unter Windows oft trouble; daher separat + tolerant.
+if (!requireNamespace("OpenStreetMap", quietly = TRUE)) {
+  try(install.packages("OpenStreetMap", dependencies = TRUE), silent = TRUE)
+}
+if (requireNamespace("OpenStreetMap", quietly = TRUE)) {
+  suppressPackageStartupMessages(library(OpenStreetMap))
+} else {
+  message("OpenStreetMap konnte nicht installiert/geladen werden (optional).")
+}
+
+# --- access failed list ----------------------------------------------------
+# names(pkg_status$fail)
+# pkg_status$fail
+
 
 message("Project root: ", here::here())
 options(timeout = 600)
