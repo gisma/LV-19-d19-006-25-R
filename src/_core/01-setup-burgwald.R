@@ -18,14 +18,16 @@ pacman::p_load(
   sf, terra,
   gdalcubes, stars, tidyterra, rstac, CDSE,
   exactextractr, RStoolbox,
-  dplyr, tidyr, ggplot2,
+  dplyr, tidyr, ggplot2, curl,
   mapview, mapedit, tmap, tmaptools, colorspace,
-  httr, OpenStreetMap, ows4R, jsonlite, osmdata, rvest, data.table,
+  httr, ows4R, jsonlite, osmdata, rvest, data.table,
   randomForest, ranger, e1071, caret, Rsagacmd, bfast, sp,link2GI
 )
 
 # remotes::install_github("r-spatial/link2GI", ref = "master")
 # library(link2GI)
+install.packages("OpenStreetMap")
+library(OpenStreetMap)
 
 message("Project root: ", here::here())
 options(timeout = 600)

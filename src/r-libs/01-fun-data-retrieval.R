@@ -199,14 +199,35 @@ get_osm_burgwald_by_key <- function(aoi_wgs84,
 #' }
 # -------------------------------------------------------
 download_if_missing <- function(url, destfile, mode = "wb") {
-  # If destfile does not exist, download it; otherwise skip
+  
+  if (anyNA(c(url, destfile)) || !nzchar(url) || !nzchar(destfile)) {
+    stop("download_if_missing(): url/destfile ungültig.")
+  }
+  
   if (!file.exists(destfile)) {
     message("Downloading:\n  ", url, "\n  -> ", destfile)
-    download.file(url, destfile = destfile, mode = mode, quiet = FALSE)
+    dir.create(dirname(destfile), recursive = TRUE, showWarnings = FALSE)
+    
+    # Windows: libcurl ist i.d.R. die stabilste Wahl
+    utils::download.file(url, destfile = destfile, mode = mode, quiet = FALSE, method = "libcurl")
   } else {
     message("File already exists, skipping download:\n  ", destfile)
   }
+  
+  # Wenn ZIP: prüfen ob es ein valides ZIP ist (sonst ist es oft HTML/Fehlerseite)
+  if (grepl("\\.zip$", destfile, ignore.case = TRUE)) {
+    zz <- try(utils::unzip(destfile, list = TRUE), silent = TRUE)
+    if (inherits(zz, "try-error")) {
+      hdr <- try(paste(readLines(destfile, n = 5, warn = FALSE), collapse = "\n"), silent = TRUE)
+      stop("download_if_missing(): Download ist kein valides ZIP:\n  ", destfile,
+           "\nURL: ", url,
+           "\nErste Zeilen:\n", if (!inherits(hdr, "try-error")) hdr else "<nicht lesbar>")
+    }
+  }
+  
+  invisible(destfile)
 }
+
 
 # -------------------------------------------------------
 #' Run an expression only if target files are missing
@@ -237,11 +258,20 @@ download_if_missing <- function(url, destfile, mode = "wb") {
 #' }
 # -------------------------------------------------------
 run_if_missing <- function(targets, expr) {
-  # Ensure targets is a character vector
   targets <- as.character(targets)
   
-  # If all target files exist, skip execution
-  if (all(file.exists(targets))) {
+  if (length(targets) < 1) {
+    stop("run_if_missing(): targets ist leer.")
+  }
+  if (anyNA(targets) || any(!nzchar(targets))) {
+    stop("run_if_missing(): targets enthält NA oder leere Strings:\n  ",
+         paste(targets, collapse = "\n  "))
+  }
+  
+  ex <- file.exists(targets)
+  
+  # NA-sicher: isTRUE() macht aus NA -> FALSE
+  if (isTRUE(all(ex))) {
     message(
       "All target files already exist, skipping step:\n  ",
       paste(targets, collapse = "\n  ")
@@ -249,10 +279,10 @@ run_if_missing <- function(targets, expr) {
     return(invisible(FALSE))
   }
   
-  # Evaluate expression only if at least one target is missing
   force(expr)
   invisible(TRUE)
 }
+
 
 
 #' Get hourly DWD station data (precipitation / wind) for Burgwald AOI + buffer
@@ -317,7 +347,36 @@ run_if_missing <- function(targets, expr) {
 #' `data/raw/dwd-stations` and `data/processed/dwd-stations`.
 #'
 #' @examples
-#' \dontrun{
+#' \dontrun{download_if_missing <- function(url, destfile, mode = "wb") {
+
+if (anyNA(c(url, destfile)) || !nzchar(url) || !nzchar(destfile)) {
+  stop("download_if_missing(): url/destfile ungültig.")
+}
+
+if (!file.exists(destfile)) {
+  message("Downloading:\n  ", url, "\n  -> ", destfile)
+  dir.create(dirname(destfile), recursive = TRUE, showWarnings = FALSE)
+  
+  # Windows: libcurl ist i.d.R. die stabilste Wahl
+  utils::download.file(url, destfile = destfile, mode = mode, quiet = FALSE, method = "libcurl")
+} else {
+  message("File already exists, skipping download:\n  ", destfile)
+}
+
+# Wenn ZIP: prüfen ob es ein valides ZIP ist (sonst ist es oft HTML/Fehlerseite)
+if (grepl("\\.zip$", destfile, ignore.case = TRUE)) {
+  zz <- try(utils::unzip(destfile, list = TRUE), silent = TRUE)
+  if (inherits(zz, "try-error")) {
+    hdr <- try(paste(readLines(destfile, n = 5, warn = FALSE), collapse = "\n"), silent = TRUE)
+    stop("download_if_missing(): Download ist kein valides ZIP:\n  ", destfile,
+         "\nURL: ", url,
+         "\nErste Zeilen:\n", if (!inherits(hdr, "try-error")) hdr else "<nicht lesbar>")
+  }
+}
+
+invisible(destfile)
+}
+
 #' # 2 years of hourly precipitation (R1 / RR) in Burgwald AOI + 50 km buffer
 #' rr_bw <- burgwald_get_hourly_dwd(
 #'   var        = "precipitation",

@@ -58,7 +58,7 @@ k_min <- 2L
 k_max <- 20L
 k_scan <- k_min:k_max
 
-cor_cutoff <- 0.9
+cor_cutoff <- 0.999
 
 kmeans_nstart_final <- 50L
 kmeans_nstart_eval  <- 20L
