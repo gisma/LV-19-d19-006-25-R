@@ -347,36 +347,7 @@ run_if_missing <- function(targets, expr) {
 #' `data/raw/dwd-stations` and `data/processed/dwd-stations`.
 #'
 #' @examples
-#' \dontrun{download_if_missing <- function(url, destfile, mode = "wb") {
-
-if (anyNA(c(url, destfile)) || !nzchar(url) || !nzchar(destfile)) {
-  stop("download_if_missing(): url/destfile ungültig.")
-}
-
-if (!file.exists(destfile)) {
-  message("Downloading:\n  ", url, "\n  -> ", destfile)
-  dir.create(dirname(destfile), recursive = TRUE, showWarnings = FALSE)
-  
-  # Windows: libcurl ist i.d.R. die stabilste Wahl
-  utils::download.file(url, destfile = destfile, mode = mode, quiet = FALSE, method = "libcurl")
-} else {
-  message("File already exists, skipping download:\n  ", destfile)
-}
-
-# Wenn ZIP: prüfen ob es ein valides ZIP ist (sonst ist es oft HTML/Fehlerseite)
-if (grepl("\\.zip$", destfile, ignore.case = TRUE)) {
-  zz <- try(utils::unzip(destfile, list = TRUE), silent = TRUE)
-  if (inherits(zz, "try-error")) {
-    hdr <- try(paste(readLines(destfile, n = 5, warn = FALSE), collapse = "\n"), silent = TRUE)
-    stop("download_if_missing(): Download ist kein valides ZIP:\n  ", destfile,
-         "\nURL: ", url,
-         "\nErste Zeilen:\n", if (!inherits(hdr, "try-error")) hdr else "<nicht lesbar>")
-  }
-}
-
-invisible(destfile)
-}
-
+#' \dontrun{
 #' # 2 years of hourly precipitation (R1 / RR) in Burgwald AOI + 50 km buffer
 #' rr_bw <- burgwald_get_hourly_dwd(
 #'   var        = "precipitation",
