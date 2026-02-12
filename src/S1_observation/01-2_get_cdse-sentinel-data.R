@@ -21,7 +21,7 @@
 #       * CDSE_ID, CDSE_SECRET
 #######################################################################
 
-source("src/_core/01-setup-burgwald.R")
+source(file.path(root_folder, "src", "_core","01-setup-burgwald.R"))
 
 ## ------------------------------------------------------------
 ## 1) Geometries / optional CLC check (S1)

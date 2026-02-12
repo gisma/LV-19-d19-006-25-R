@@ -48,7 +48,7 @@
 #   - the DWD helper functions used below.
 # Expects aoi_burgwald_wgs and burgwald_bbox to be defined there.
 
-source("src/_core/01-setup-burgwald.R")
+source(file.path(root_folder, "src", "_core","01-setup-burgwald.R"))
 
 
 # ----------------------------------------------------------

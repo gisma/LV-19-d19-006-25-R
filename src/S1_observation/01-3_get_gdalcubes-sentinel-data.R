@@ -16,7 +16,7 @@
 #       * aoi_burgwald_wgs, paths, root_folder, ndvi.col, write_nc_if_missing()
 ############################################################
 
-source("src/_core/01-setup-burgwald.R")
+source(file.path(root_folder, "src", "_core","01-setup-burgwald.R"))
 
 # Canonical S2 output path (must exist as key in metadata/outputs.tsv)
 out_file <- paths[["s2_gdalcubes_cube_2018_2022_all"]]

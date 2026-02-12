@@ -80,8 +80,8 @@ Sys.setenv(OSM_TIMEOUT = 600)
 
 
 # --- folder skeleton (single source) --------------------------------------
-source("src/_core/00-folders.R")
-source("src/_core/02-helper.R")
+source(file.path(root_folder, "src", "_core","00-folders.R"))
+source(file.path(root_folder, "src", "_core","02-helper.R"))
 
 root_folder <- here::here()
 dirs <- createFolders_simple(root_folder = root_folder, folders = burgwald_folders(), create_folders = TRUE)

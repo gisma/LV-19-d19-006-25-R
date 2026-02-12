@@ -10,7 +10,7 @@
 #   - osm_by_key
 ############################################################
 
-source("src/_core/01-setup-burgwald.R")
+source(file.path(root_folder, "src", "_core","01-setup-burgwald.R"))
 
 
 ############################################################
