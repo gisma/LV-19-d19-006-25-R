@@ -1,134 +1,9 @@
 # fun_clim_core_RSK.R
 # Minimal function bundle for DWD CDC KL daily -> RSK workflow (newpipe=TRUE).
 # Extracted from fun_clim_data.R without refactoring.
+# FIX: remove stray top-level statements; keep helpers scoped correctly.
 
 fix_enc <- function(v) iconv(v, to = "UTF-8", sub = "")
-  st_meta[, `:=`(
-    Stationsname = fix_enc(Stationsname),
-    Bundesland   = fix_enc(Bundesland),
-    Abgabe       = fix_enc(Abgabe)
-  )]
-  
-  st_meta_u <- st_meta[, .(
-    Stationsname  = Stationsname[1],
-    Bundesland    = Bundesland[1],
-    Abgabe        = Abgabe[1],
-    Stationshoehe = Stationshoehe[1],
-    geoBreite     = geoBreite[1],
-    geoLaenge     = geoLaenge[1]
-  ), by = STATIONS_ID]
-  
-  st_span_u <- st_meta[, .(
-    von_datum = as.integer(format(min(von_datum, na.rm = TRUE), "%Y%m%d")),
-    bis_datum = as.integer(format(max(bis_datum, na.rm = TRUE), "%Y%m%d"))
-  ), by = STATIONS_ID]
-  
-  setkey(st_span_u, STATIONS_ID)
-  setkey(dt,        STATIONS_ID)
-  dt <- st_span_u[dt]
-  
-  if (anyNA(dt$von_datum) || anyNA(dt$bis_datum)) {
-    bad <- unique(dt[is.na(von_datum) | is.na(bis_datum), STATIONS_ID])
-    stop("Missing von_datum/bis_datum for STATIONS_ID: ", paste(bad, collapse = ", "))
-  }
-
-
-list_remote_files <- function(url, pattern = NULL) {
-    doc <- rvest::read_html(url)
-    files <- doc |> rvest::html_elements("a") |> rvest::html_attr("href")
-    files <- files[!is.na(files) & files != "../"]
-    if (!is.null(pattern)) files <- files[grepl(pattern, files)]
-    files <- unique(files)
-    data.table(url = paste0(url, files), file = files)
-  }
-
-
-download_if_missing <- function(url, destfile) {
-    if (file.exists(destfile)) return(invisible(FALSE))
-    message("download zip: ", destfile)
-    tryCatch({
-      utils::download.file(url, destfile = destfile, mode = "wb", quiet = TRUE)
-      TRUE
-    }, error = function(e) {
-      message("DOWNLOAD FAILED: ", url)
-      message(conditionMessage(e))
-      FALSE
-    })
-  }
-
-
-unzip_zip <- function(zipfile, exdir) {
-    suppressWarnings(utils::unzip(zipfile, exdir = exdir))
-    invisible(TRUE)
-  }
-
-
-parse_prod_span <- function(files) {
-    bn <- basename(files)
-    m <- regexec("^produkt_klima_tag_(\\d{8})_(\\d{8})_(\\d{5})\\.txt$", bn)
-    mm <- regmatches(bn, m)
-    ok <- lengths(mm) == 4
-    if (!all(ok)) stop("Unexpected product filenames encountered.")
-    data.table(
-      STATIONS_ID = vapply(mm, `[[`, character(1), 4),
-      file_start  = as.Date(vapply(mm, `[[`, character(1), 2), "%Y%m%d"),
-      file_end    = as.Date(vapply(mm, `[[`, character(1), 3), "%Y%m%d"),
-      file        = bn
-    )
-  }
-
-
-read_one_product_file <- function(f, source_tag) {
-    bn <- basename(f)
-    m <- regexec("^produkt_klima_tag_(\\d{8})_(\\d{8})_(\\d{5})\\.txt$", bn)
-    mm <- regmatches(bn, m)[[1]]
-    if (length(mm) != 4) stop("Unexpected product filename: ", bn)
-    
-    file_sid <- mm[4]
-    
-    dt <- data.table::fread(
-      f,
-      sep = ";",
-      na.strings = "-999",
-      strip.white = TRUE,
-      showProgress = FALSE
-    )
-    
-    req <- c("STATIONS_ID", "MESS_DATUM", "QN_4")
-    miss <- setdiff(req, names(dt))
-    if (length(miss) > 0) {
-      message("SKIP (missing cols): ", bn, " -> ", paste(miss, collapse = ", "))
-      return(NULL)
-    }
-    
-    dt[, STATIONS_ID := sprintf("%05d", as.integer(STATIONS_ID))]
-    dt[, MESS_DATUM := as.Date(as.character(MESS_DATUM), format = "%Y%m%d")]
-    dt[, QN_4 := as.integer(QN_4)]
-    
-    # HARD station-id validation: filename id must match content (wie Script)
-    if (any(dt$STATIONS_ID != file_sid, na.rm = TRUE)) {
-      bad <- dt[STATIONS_ID != file_sid, .N]
-      stop("STATION-ID MISMATCH: filename SID=", file_sid,
-           " but file contains other STATIONS_ID values. File=", bn,
-           " mismatching rows=", bad)
-    }
-    
-    # date window filter only (wie Script)
-    dt <- dt[!is.na(MESS_DATUM) & MESS_DATUM >= start_date & MESS_DATUM <= end_date]
-    if (nrow(dt) == 0) return(NULL)
-    
-    present <- intersect(keep_cols, names(dt))
-    dt <- dt[, ..present]
-    for (cc in setdiff(keep_cols, names(dt))) dt[, (cc) := NA]
-    setcolorder(dt, keep_cols)
-    
-    # provenance for duplicate diagnostics (wie Script)
-    dt[, source := source_tag]
-    dt[, file := bn]
-    
-    dt[]
-  }
-
 
 sanitize_climate_param <- function(sf_day, cVar, date = NULL) {
   x <- as.numeric(sf_day[[cVar]])
@@ -146,7 +21,6 @@ sanitize_climate_param <- function(sf_day, cVar, date = NULL) {
   
   if (cVar == "PM") {
     x[x > 1060.6] <- 1060.6
-    #x[x < 954.9]  <- 954.9
     x[x < 500.0]  <- 500.0
   }
   
@@ -171,7 +45,7 @@ sanitize_climate_param <- function(sf_day, cVar, date = NULL) {
   }
   
   sf_day$tmp <- x
-  return(sf_day)
+  sf_day
 }
 
 
@@ -237,6 +111,7 @@ kl_daily_core_prepare <- function(
   
   n_days_total <- as.integer(end_date - start_date) + 1L
   full_dates   <- seq.Date(start_date, end_date, by = "day") # (wie Script)
+  rm(full_dates) # kept only for symmetry with script; not used further
   
   pat_prod <- "^produkt_klima_tag_\\d{8}_\\d{8}_\\d{5}\\.txt$"
   pat_zip  <- "\\.zip$"
@@ -264,7 +139,7 @@ kl_daily_core_prepare <- function(
   }
   
   # ============================================================
-  # HELPERS (1:1 aus direktdownload)
+  # HELPERS (scoped; rely on start_date/end_date/keep_cols)
   # ============================================================
   list_remote_files <- function(url, pattern = NULL) {
     doc <- rvest::read_html(url)
@@ -438,7 +313,11 @@ kl_daily_core_prepare <- function(
     prod_files_csv, sep = ";"
   )
   
-  span_all <- data.table::rbindlist(list(parse_prod_span(prod_hist), parse_prod_span(prod_rec)), use.names = TRUE)
+  span_all <- data.table::rbindlist(
+    list(parse_prod_span(prod_hist), parse_prod_span(prod_rec)),
+    use.names = TRUE
+  )
+  
   st_span_files <- span_all[, .(
     min_file_start = min(file_start, na.rm = TRUE),
     max_file_end   = max(file_end,   na.rm = TRUE),
@@ -464,7 +343,7 @@ kl_daily_core_prepare <- function(
   rm(res_hist, res_rec); gc()
   
   if (nrow(dt) == 0) stop("No rows after reading+date filter.")
-  data.table::setDT(dt)  # **wichtig**: garantiert data.table
+  data.table::setDT(dt)  # garantiert data.table
   
   # ============================================================
   # 6) QN_4 diagnostics (wie Script)
@@ -501,7 +380,12 @@ kl_daily_core_prepare <- function(
   dt_dates <- unique(dt[, .(STATIONS_ID, MESS_DATUM)])
   setorder(dt_dates, STATIONS_ID, MESS_DATUM)
   
-  st_cov <- dt_dates[, .(n_dates = .N, min_date = min(MESS_DATUM), max_date = max(MESS_DATUM)), by = STATIONS_ID]
+  st_cov <- dt_dates[, .(
+    n_dates  = .N,
+    min_date = min(MESS_DATUM),
+    max_date = max(MESS_DATUM)
+  ), by = STATIONS_ID]
+  
   st_cov[, expected := n_days_total]
   st_cov[, coverage_frac := n_dates / expected]
   st_cov[, missing_frac  := 1 - coverage_frac]
@@ -545,8 +429,10 @@ kl_daily_core_prepare <- function(
     gap_after  <- as.integer(end_date - max(d))
     dif <- diff(d)
     internal <- if (length(dif)) pmax(0L, as.integer(dif) - 1L) else integer()
-    list(max_gap = max(c(gap_before, internal, gap_after), na.rm = TRUE),
-         n_dates  = .N)
+    list(
+      max_gap = max(c(gap_before, internal, gap_after), na.rm = TRUE),
+      n_dates = .N
+    )
   }, by = STATIONS_ID]
   
   stopifnot(all(st_gap2$max_gap <= delta_t))
@@ -555,9 +441,7 @@ kl_daily_core_prepare <- function(
   # ============================================================
   # 9.5) Merge station metadata (wie Script-Block in direktdownload)
   # ============================================================
-  suppressPackageStartupMessages({
-    library(sf)
-  })
+  suppressPackageStartupMessages(library(sf))
   
   meta_file <- path.expand(meta_file)
   stopifnot(file.exists(meta_file))
@@ -566,7 +450,7 @@ kl_daily_core_prepare <- function(
   x  <- ln[-c(1,2)]
   x  <- x[nzchar(trimws(x))]
   
-  st_meta <- data.table::rbindlist(lapply(x, function(s){
+  st_meta <- data.table::rbindlist(lapply(x, function(s) {
     m <- regexec(
       "^\\s*([0-9]{5})\\s+([0-9]{8})\\s+([0-9]{8})\\s+(-?[0-9]+)\\s+([0-9]+\\.[0-9]+)\\s+([0-9]+\\.[0-9]+)\\s*(.*)$",
       s
@@ -591,7 +475,6 @@ kl_daily_core_prepare <- function(
     )
   }), fill = TRUE)
   
-  fix_enc <- function(v) iconv(v, to = "UTF-8", sub = "")
   st_meta[, `:=`(
     Stationsname = fix_enc(Stationsname),
     Bundesland   = fix_enc(Bundesland),

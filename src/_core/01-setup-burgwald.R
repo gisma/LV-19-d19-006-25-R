@@ -172,3 +172,27 @@ dir.create(terra_tmp_dir, showWarnings = FALSE, recursive = TRUE)
 Sys.setenv(TMPDIR = r_tmp_dir, TEMP = r_tmp_dir, TMP = r_tmp_dir)
 
 terra::terraOptions(tempdir = terra_tmp_dir, memfrac = 0.2, todisk = TRUE)
+
+
+# --- Climate interpolation paths (minimal envrmt compatibility) ------------
+# These keys are required by fun_clim_* helpers (historically envimaR::createEnvi()).
+# We keep this strictly as a path registry; no administrative extraction here.
+
+envrmt <- list(
+  # raw roots
+  path_data_lev0 = here::here("data", "raw"),
+  # derived products (interpolation outputs)
+  path_data_lev1 = here::here("data", "productive", "S2_features"),
+  # optional / not used in the simplified RSK pipeline but kept for compatibility
+  path_data_lev2 = here::here("data", "productive", "S3_structure"),
+  
+  # providers
+  path_CDC_KL    = here::here("data", "raw", "providers", "dwd"),
+  path_GhcnDaily = here::here("data", "raw", "providers", "ghcn_daily"),
+  path_GhcnMonthly = here::here("data", "raw", "providers", "ghcn_monthly")
+)
+
+# ensure provider dirs exist (no-ops if already there)
+dir.create(envrmt$path_CDC_KL, recursive = TRUE, showWarnings = FALSE)
+dir.create(envrmt$path_GhcnDaily, recursive = TRUE, showWarnings = FALSE)
+dir.create(envrmt$path_GhcnMonthly, recursive = TRUE, showWarnings = FALSE)
